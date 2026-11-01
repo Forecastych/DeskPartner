@@ -25,9 +25,9 @@ describe('кадры', () => {
     }
   });
 
-  it('стоит, идёт и сидит на земле — нижний ряд закрашен', () => {
+  it('всё, кроме сна на рамке, стоит на земле — нижний ряд закрашен', () => {
     for (const fat of FATS)
-      for (const name of ['stand', 'walk', 'sit'] as const)
+      for (const name of ['stand', 'walk', 'sit', 'loaf', 'sideLoaf', 'faceplant', 'sidePlant', 'groom'] as const)
         for (const f of ANIMS[fat][name].frames) expect(hitMask(f)[SIZE - 1]).not.toBe(0);
   });
 

@@ -55,8 +55,18 @@ const BODY: Part = [
   '..kkkkkkkkkkkkkk..',
 ];
 
-/** Вдох: туловище на ряд выше за счёт лишнего ряда посередине. */
-const inhale = (body: Part): Part => [...body.slice(0, 4), body[3], ...body.slice(4)];
+/**
+ * Вдох: середина спины приподнимается на пиксель, края и низ на месте.
+ * Целый лишний ряд дёргал всё туловище и отвлекал от работы.
+ */
+function inhale(body: Part): Part {
+  const top = body[0];
+  const from = top.indexOf('k') + 4;
+  const to = top.lastIndexOf('k') - 4;
+  const bump = [...top].map((_, x) => (x >= from && x <= to ? 'k' : '.')).join('');
+  const lifted = [...top].map((c, x) => (x >= from && x <= to ? 'f' : c)).join('');
+  return [bump, lifted, ...body.slice(1)];
+}
 
 /** Лапа сбоку, 4 в ширину: начинается на нижнем контуре туловища, `len` рядов, носочек светлый. */
 const leg = (len: number): Part => [...Array<string>(len - 2).fill('kffk'), 'kllk', 'kkkk'];
@@ -99,29 +109,40 @@ export function fatOn(date: Date): Fat {
 /** Туловище сбоку на `fat` рядов глубже: живот провисает вниз, лапы от этого короче. */
 const sideBody = (fat: Fat): Part => [...BODY.slice(0, 6), ...Array<string>(fat).fill(BODY[5]), ...BODY.slice(6)];
 
+/** Полуширина каждого ряда туловища анфас, сверху вниз; последний ряд — нижний контур. */
+const SIT_HALF = [3, 3, 4, 4, 5, 6, 6, 6, 6, 6];
+const LOAF_HALF = [4, 5, 5, 6, 6, 6, 6];
+
 /**
- * Сидит анфас грушей, 10 рядов по центру x 16: узко под головой, ниже бёдра раздаются,
- * с каждым уровнем жира — ещё на пиксель с боков. Грудка светлая и книзу шире,
- * лапки разделены одной выемкой в нижнем ряду: длинные тёмные линии превращают кошку в трезубец.
+ * Туловище анфас по центру x 16: узко под головой, ниже бёдра. Жирок раздаёт бока
+ * на пиксель за уровень, кроме самых верхних рядов — шея не толстеет.
+ * `legs`: прямые передние лапы — светлый столбик в контуре от грудки до пола, носочки
+ * разделены только в нижнем ряду; 'right' — левая (для зрителя) поднята к морде, стоит одна правая.
+ * Без лап грудка сплошная, лапки рисуются поверх (`PAWS`).
  */
-function sitBody(fat: Fat): Part {
-  const half = [3, 3, 4, 4, 5, 5, 5, 6, 6, 6].map((h, y) => h + (y >= 4 ? fat : y >= 2 ? Math.min(fat, 1) : 0));
+function frontBody(fat: Fat, halves: number[], legs: boolean | 'right'): Part {
+  const half = halves.map((h, y) => h + Math.min(fat, y >> 1));
   const widest = Math.max(...half);
   const last = half.length - 1;
   return half.map((h, y) => {
     let row = '.'.repeat(widest - h);
     for (let x = -h; x < h; x++) {
       const edge = x === -h || x === h - 1;
-      const chest = y >= 7 ? 3 : y >= 4 ? 2 : 1;
+      const chest = y >= 4 ? 2 : 1;
       if (y === last) row += edge ? '.' : 'k';
       else if (edge) row += 'k';
-      else if (y === last - 1 && (x === -1 || x === 0)) row += 'k';
+      else if (legs === 'right' && y >= last - 4) row += x === 0 || x === 3 ? 'k' : x > 0 && x < 3 ? 'l' : 'f';
+      else if (legs && y === last - 1) row += x === -3 || x === 0 || x === 3 ? 'k' : x > -3 && x < 3 ? 'l' : 'f';
+      else if (legs && y >= last - 4) row += x === -3 || x === 2 ? 'k' : x > -3 && x < 2 ? 'l' : 'f';
       else if (x >= -chest && x < chest) row += 'l';
       else row += 'f';
     }
     return row + '.'.repeat(widest - h);
   });
 }
+
+// Лапки буханки анфас, 10×4: два светлых овала из-под грудки, нижний ряд ложится на контур туловища.
+const PAWS: Part = ['.kkk..kkk.', 'klllkklllk', 'klllkklllk', 'kkkkkkkkkk'];
 
 // Хвост, обёрнутый вокруг лап; кончик то лежит, то подрагивает.
 const SIT_TAIL: Part = ['......kk', '.....kdk', 'kk...kfk', 'kfkkkffk', '.kffffk.', '..kkkk..'];
@@ -171,15 +192,103 @@ const LIFT_B: [number, boolean][] = [[0, false], [0, true], [0, true], [0, false
 
 /** Сидит анфас посередине: голова y 12–21, туловище y 22–31, хвост выглядывает справа. */
 function sitting(fat: Fat, eyes: Part, tail: Part, extra: [Part, number, number][] = []): Frame {
-  const body = sitBody(fat);
+  const body = frontBody(fat, SIT_HALF, true);
   const half = body[0].length / 2;
   return compose([tail, 13 + half, 26], [body, 16 - half, 22], [head(eyes), 10, 12], ...extra);
+}
+
+// Умывание: левая лапа поднята к морде — у рта, чтобы лизнуть, или у глаза, чтобы потереть.
+// Светлая подушечка сверху, ниже предплечье до груди (y 23), иначе лапа висит в воздухе.
+const raisedPaw = (y: number): Part => ['.kk.', 'kllk', 'kllk', ...Array<string>(23 - y - 2).fill('kffk')];
+const TONGUE: Part = ['pp'];
+
+function grooming(fat: Fat, eyes: Part, pawY: number, tongue: boolean): Frame {
+  const body = frontBody(fat, SIT_HALF, 'right');
+  const half = body[0].length / 2;
+  const extra: [Part, number, number][] = tongue ? [[TONGUE, 15, 21]] : [];
+  return compose(
+    [SIT_TAIL, 13 + half, 26],
+    [body, 16 - half, 22],
+    [head(eyes), 10, 12],
+    ...extra,
+    [raisedPaw(pawY), 12, pawY],
+  );
+}
+
+/** Буханка анфас: ниже, чем сидя, лапки подобраны под грудку. */
+function frontLoaf(fat: Fat, eyes: Part): Frame {
+  const body = frontBody(fat, LOAF_HALF, false);
+  const half = body[0].length / 2;
+  const y = SIZE - body.length;
+  return compose([SIT_TAIL, 13 + half, 26], [body, 16 - half, y], [PAWS, 11, 28], [head(eyes), 10, y - 10]);
 }
 
 /** Спит калачиком; нижний контур туловища (y 27) лежит на рамке окна, жирок растёт вверх. */
 function sleeping(body: Part, tail: Part, z: [Part, number, number]): Frame {
   const y = 28 - body.length;
   return compose([tail, 3, 26], [body, 5, y], [head(EYES_SHUT), 17, 17], z);
+}
+
+/** Буханка сбоку: лежит на земле, лапы и хвост спрятаны под себя, голова поднята. */
+function sideLoaf(body: Part, eyes: Part): Frame {
+  const y = SIZE - body.length;
+  return compose([body, 5, y], [head(eyes), 17, y - 5]);
+}
+
+/** Верх спины лицом в пол сбоку, по столбцам: круп кверху, спина скатывается к голове. */
+const PLANT_TOP = [5, 3, 2, 1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 9, 10];
+
+/**
+ * Туловище лицом в пол сбоку: контур — всё, что граничит с пустотой, сзади поджатая светлая лапка.
+ * На вдохе приподнимается круп, а не вся спина. Жирок добавляет рядов снизу — кошка выше.
+ */
+function plantBody(fat: Fat, breath: boolean): Part {
+  const top = PLANT_TOP.map((t, x) => (breath && x >= 3 && x <= 8 ? t - 1 : t));
+  const h = 12 + fat;
+  // нижний задний угол срезан — круп круглый, а не кирпичом
+  const inside = (x: number, y: number) => x >= 0 && x < top.length && y >= top[x] && y < h && !(x === 0 && y === h - 1);
+  return Array.from({ length: h }, (_, y) =>
+    top
+      .map((_, x) => {
+        if (!inside(x, y)) return '.';
+        if (!inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1)) return 'k';
+        if (y >= h - 3 && x <= 4) return 'l';
+        if ((x === 5 || x === 8 || x === 11) && y <= top[x] + 2) return 'd';
+        return 'f';
+      })
+      .join(''),
+  );
+}
+
+/** Спит, уткнувшись головой в пол, сбоку: из пола торчат только уши и лоб, хвост над крупом. */
+function sidePlant(fat: Fat, breath: boolean, tail: Part, z: [Part, number, number]): Frame {
+  const body = plantBody(fat, breath);
+  const y = SIZE - body.length;
+  return compose([tail, 0, y - 6], [body, 2, y], [[...HEAD_TOP, 'kkkkkkkkkkkk'], 18, SIZE - 6], z);
+}
+
+/**
+ * Спит, уткнувшись головой в пол, анфас: круглая спина закрывает почти всю голову,
+ * снизу торчат только уши и лоб — остальное в полу. По бокам светлые задние лапки, хвост над спиной.
+ */
+function faceplant(fat: Fat, tail: Part, z: [Part, number, number]): Frame {
+  const half = [3, 5, 6, 7, 7, 8, 8, 8, 8, 8, 8, 8].map((h, y) => h + (y >= 2 ? fat : 0));
+  const widest = Math.max(...half);
+  const last = half.length - 1;
+  const back = half.map((h, y) => {
+    let row = '.'.repeat(widest - h);
+    for (let x = -h; x < h; x++) {
+      const edge = x === -h || x === h - 1;
+      if (y === last) row += edge ? '.' : 'k';
+      else if (edge || y === 0) row += 'k';
+      else if (y >= last - 2 && (x === -h + 1 || x === -h + 2 || x === h - 2 || x === h - 3)) row += 'l';
+      else if (y >= 1 && y <= 3 && (x === -2 || x === 1)) row += 'd';
+      else row += 'f';
+    }
+    return row + '.'.repeat(widest - h);
+  });
+  const y0 = SIZE - back.length;
+  return compose([tail, 17, y0 - 6], [back, 16 - widest, y0], [[...HEAD_TOP, 'kkkkkkkkkkkk'], 10, SIZE - 6], z);
 }
 
 export interface Anim {
@@ -219,11 +328,56 @@ function build(fat: Fat) {
         sitting(fat, EYES_SHUT, SIT_TAIL),
       ],
     },
+    loaf: {
+      ms: 1000,
+      frames: [
+        frontLoaf(fat, EYES_OPEN),
+        frontLoaf(fat, EYES_OPEN),
+        frontLoaf(fat, EYES_OPEN),
+        frontLoaf(fat, EYES_OPEN),
+        frontLoaf(fat, EYES_SHUT),
+      ],
+    },
+    sideLoaf: {
+      ms: 1000,
+      frames: [
+        sideLoaf(body, EYES_OPEN),
+        sideLoaf(body, EYES_OPEN),
+        sideLoaf(body, EYES_OPEN),
+        sideLoaf(body, EYES_OPEN),
+        sideLoaf(body, EYES_SHUT),
+      ],
+    },
     sleep: {
-      ms: 900,
+      ms: 1500,
       frames: [
         sleeping(body, SLEEP_TAIL, [Z_SMALL, 25, 11]),
         sleeping(inhale(body), SLEEP_TAIL_SWAY, [Z_BIG, 26, 6]),
+      ],
+    },
+    faceplant: {
+      ms: 1500,
+      frames: [
+        faceplant(fat, TAIL_UP, [Z_SMALL, 25, 9]),
+        faceplant(fat, TAIL_SWAY, [Z_BIG, 26, 4]),
+      ],
+    },
+    sidePlant: {
+      ms: 1500,
+      frames: [
+        sidePlant(fat, false, TAIL_UP, [Z_SMALL, 27, 16]),
+        sidePlant(fat, true, TAIL_SWAY, [Z_BIG, 27, 11]),
+      ],
+    },
+    groom: {
+      ms: 350,
+      frames: [
+        grooming(fat, EYES_SHUT, 18, true),
+        grooming(fat, EYES_SHUT, 19, false),
+        grooming(fat, EYES_SHUT, 18, true),
+        grooming(fat, EYES_SHUT, 14, false),
+        grooming(fat, EYES_SHUT, 16, false),
+        grooming(fat, EYES_SHUT, 14, false),
       ],
     },
     petted: {
