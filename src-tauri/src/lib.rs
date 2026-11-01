@@ -1,7 +1,12 @@
 mod hit;
+mod tracker;
+#[cfg(windows)]
+mod win;
 
 use hit::{HitMask, SPRITE};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+use tracker::{Day, Now, Pace, Tracker};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -10,9 +15,63 @@ use tauri::{AppHandle, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 /// 32 × 4 = 128: при любом шаге масштаба в 25% клетка остаётся целым числом экранных пикселей.
 const ZOOM: f64 = 4.0;
 
+/// Что питомец знает о человеке прямо сейчас.
+struct Senses {
+    tracker: Arc<Mutex<Tracker>>,
+    /// Программа в активном окне на последнем тике.
+    app: Mutex<Option<String>>,
+}
+
+#[derive(serde::Serialize)]
+struct SensesNow {
+    app: Option<String>,
+    idle: bool,
+    typing: bool,
+    pace: Pace,
+    session_secs: u64,
+    active_today_secs: u64,
+    #[cfg(windows)]
+    quiet: win::Quiet,
+}
+
 #[tauri::command]
 fn set_hit_mask(mask: State<'_, Arc<HitMask>>, rows: Vec<u32>) {
     mask.set(rows);
+}
+
+#[tauri::command]
+fn senses(s: State<'_, Arc<Senses>>) -> SensesNow {
+    let at = Instant::now();
+    let t = s.tracker.lock().unwrap();
+    SensesNow {
+        app: s.app.lock().unwrap().clone(),
+        idle: t.idle(at),
+        typing: t.typing(at),
+        pace: t.pace(),
+        session_secs: t.session_secs(at),
+        active_today_secs: t.day.active_seconds,
+        #[cfg(windows)]
+        quiet: win::quiet(),
+    }
+}
+
+/// Сырой ввод и тик раз в секунду: чистое время, программы, сессии.
+#[cfg(windows)]
+fn start_senses(s: Arc<Senses>) {
+    win::start_input(s.tracker.clone());
+    std::thread::Builder::new()
+        .name("senses-tick".into())
+        .spawn(move || {
+            let mut fg = win::Foreground::new();
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let app = fg.current();
+                // закончившийся день пока выбрасываем: хранилища ещё нет
+                let _ = s.tracker.lock().unwrap().tick(&Now::local(), app.as_deref());
+                *s.app.lock().unwrap() = app;
+            }
+        })
+        .expect("senses tick thread");
 }
 
 /// Окно размером с питомца: прозрачное, поверх всех, без рамки, без значка на панели задач.
@@ -62,12 +121,20 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mask = Arc::new(HitMask::default());
+    let now = Now::local();
+    let feel = Arc::new(Senses {
+        tracker: Arc::new(Mutex::new(Tracker::new(Day::new(&now.date), &now))),
+        app: Mutex::new(None),
+    });
     tauri::Builder::default()
         // второй экземпляр просто закрывается: два одинаковых питомца — уже не питомец
         .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
         .manage(mask.clone())
-        .invoke_handler(tauri::generate_handler![set_hit_mask])
+        .manage(feel.clone())
+        .invoke_handler(tauri::generate_handler![set_hit_mask, senses])
         .setup(move |app| {
+            #[cfg(windows)]
+            start_senses(feel);
             let pet = build_pet_window(app.handle())?;
             hit::spawn(pet, mask);
             build_tray(app.handle())?;
