@@ -1,8 +1,11 @@
 //! Окна приложения. "pet" и "bowl" — прозрачные спрайты поверх всего, клики сквозь них
 //! проходят везде, кроме рисунка (hit.rs). "setup" — обычное окно первого запуска: пока
 //! человек не выбрал папку данных и не сохранил настройки (store.rs), питомца нет, есть только оно.
+//! "settings" — обычное окно настроек, открывается из трея и меню питомца.
 
 mod hit;
+mod laser;
+mod menu;
 mod shake;
 mod store;
 mod tracker;
@@ -25,6 +28,9 @@ const ZOOM: f64 = 4.0;
 /// Окна-спрайты на рабочем столе. Порядок — это порядок по глубине: построенное позже
 /// ложится сверху, и кошка, что пришла есть, должна быть перед миской, а не под горкой корма.
 const SPRITES: [&str; 2] = ["bowl", "pet"];
+
+/// Кого прячет галочка «Прятать от записи экрана». Точку лазера и её эффекты laser.rs прячет всегда сам.
+const CAPTURED: [&str; 3] = ["bowl", "pet", "menu"];
 
 /// Что питомец знает о человеке прямо сейчас.
 struct Senses {
@@ -54,7 +60,7 @@ fn set_hit_mask(window: WebviewWindow, masks: State<'_, Arc<Masks>>, rows: Vec<u
 /// Прятать ли питомца и миску от записи экрана и скриншотов.
 #[tauri::command]
 fn set_capture_hidden(app: AppHandle, hidden: bool) -> Result<(), String> {
-    for w in SPRITES.iter().filter_map(|l| app.get_webview_window(l)) {
+    for w in CAPTURED.iter().filter_map(|l| app.get_webview_window(l)) {
         w.set_content_protected(hidden).map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -130,6 +136,9 @@ fn open_sprites(app: &AppHandle) -> tauri::Result<()> {
     for label in SPRITES {
         hit::spawn(build_sprite_window(app, label)?, masks.clone());
     }
+    // меню и лазер строятся заранее и прячутся: по клику окно только показывают, без задержки
+    menu::build(app)?;
+    laser::build(app)?;
     Ok(())
 }
 
@@ -138,7 +147,10 @@ fn open_sprites(app: &AppHandle) -> tauri::Result<()> {
 fn build_setup_window(app: &AppHandle) -> tauri::Result<()> {
     let w = WebviewWindowBuilder::new(app, "setup", WebviewUrl::App("index.html".into()))
         .title("DeskPartner — первый запуск")
-        .inner_size(560.0, 680.0)
+        // рамка своя, пиксельная (src/ui): +32 под её полосу заголовка; тень системная
+        .inner_size(560.0, 712.0)
+        .decorations(false)
+        .shadow(true)
         .resizable(false)
         .center()
         .focused(true)
@@ -172,13 +184,53 @@ async fn finish_setup(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Окно настроек: обычное, одно на всё приложение. Открыто — поднять его, а не строить второе.
+/// Пока идёт первый запуск, настраивать нечего — поднимаем мастер.
+/// Закрытие этого окна программу не закрывает: питомец и миска остаются.
+fn show_settings(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(w) = app.get_webview_window("settings").or_else(|| app.get_webview_window("setup")) {
+        w.unminimize()?;
+        w.show()?;
+        return w.set_focus();
+    }
+    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+        .title("DeskPartner — настройки")
+        .inner_size(560.0, 752.0)
+        .min_inner_size(460.0, 512.0)
+        .decorations(false)
+        .shadow(true)
+        .center()
+        .focused(true)
+        .build()?;
+    Ok(())
+}
+
+/// async по той же причине, что и finish_setup: окно из синхронной команды вешает Windows (wry#583).
+#[tauri::command]
+async fn open_settings(app: AppHandle) -> Result<(), String> {
+    show_settings(&app).map_err(|e| e.to_string())
+}
+
+/// Сменить папку данных и перезапуститься: в новой папке могли лежать свои файлы питомца,
+/// они побеждают, а перечитать всё с нуля проще и надёжнее, чем подменять на ходу.
+/// Синхронная, как и команды store.rs: идёт в главном потоке по очереди с save_state.
+#[tauri::command]
+fn move_data_dir(app: AppHandle, dir: String) -> Result<(), String> {
+    store::set_data_dir(dir)?;
+    // не restart(): тот из главного потока выходит сразу, не ответив окну. request_restart
+    // выходит обычным путём, и single-instance успевает отпустить мьютекс до нового запуска
+    app.request_restart();
+    Ok(())
+}
+
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // кошка умеет уходить за край экрана — отсюда её зовут обратно
     let call = MenuItem::with_id(app, "call", "Позвать питомца", true, None::<&str>)?;
     // некормленый кот уходит навсегда — без этого пункта вернуть питомца было бы нечем
     let adopt = MenuItem::with_id(app, "adopt", "Новый котик", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Настройки…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&call, &adopt, &quit])?;
+    let menu = Menu::with_items(app, &[&call, &adopt, &settings, &quit])?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("DeskPartner")
         .menu(&menu)
@@ -187,6 +239,15 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 if let Err(err) = app.emit_to("pet", id, ()) {
                     eprintln!("{id}: {err}");
                 }
+            }
+            // обработчик меню идёт в главном потоке — окно строим из пула, как в open_settings
+            "settings" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(err) = show_settings(&app) {
+                        eprintln!("settings: {err}");
+                    }
+                });
             }
             "quit" => app.exit(0),
             _ => {}
@@ -216,6 +277,16 @@ pub fn run() {
             set_hit_mask,
             set_capture_hidden,
             finish_setup,
+            open_settings,
+            move_data_dir,
+            menu::open_menu,
+            menu::menu_size,
+            menu::menu_pick,
+            menu::close_menu,
+            laser::set_laser,
+            laser::push_pixels,
+            laser::push_show,
+            laser::push_done,
             senses,
             world::world,
             world::place_pet,

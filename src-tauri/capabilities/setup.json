@@ -1,7 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "setup",
-  "description": "Окно первого запуска: системный диалог выбора папки данных",
-  "windows": ["setup"],
-  "permissions": ["dialog:allow-open"]
+  "description": "Окна первого запуска и настроек: системный диалог выбора папки данных и своя полоса заголовка (таскать, свернуть, закрыть)",
+  "windows": ["setup", "settings"],
+  "permissions": [
+    "dialog:allow-open",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-close",
+    "core:window:allow-destroy"
+  ]
 }

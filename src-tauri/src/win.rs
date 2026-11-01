@@ -8,6 +8,7 @@
 
 use crate::tracker::Tracker;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
@@ -27,6 +28,19 @@ static SINK: OnceLock<Arc<Mutex<Tracker>>> = OnceLock::new();
 
 const RI_KEY_BREAK: u16 = 1;
 const MOUSE_MOVE_ABSOLUTE: u16 = 1;
+/// Нажатия кнопок мыши (левая, правая, средняя, две боковые) и прокрутка колесом в обе стороны.
+const MOUSE_PRESSES: u16 = 0x0001 | 0x0004 | 0x0010 | 0x0040 | 0x0100 | 0x0400 | 0x0800;
+/// Ctrl, левый и правый: его держат для лазерной указки, сам он «другим нажатием» не считается.
+const CTRL_KEYS: [u16; 3] = [0x11, 0xA2, 0xA3];
+
+/// Сколько всего было нажатий, кроме Ctrl: клавиши, кнопки мыши, колесо. Лазер (laser.rs)
+/// смотрит, сдвинулся ли счётчик, пока держат Ctrl: так видны Ctrl+колесо и короткий Ctrl+C,
+/// которые опрос GetAsyncKeyState пропустил бы.
+static PRESSES: AtomicU32 = AtomicU32::new(0);
+
+pub fn presses() -> u32 {
+    PRESSES.load(Ordering::Relaxed)
+}
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -104,7 +118,11 @@ unsafe fn handle_input(h: HRAWINPUT) {
     match raw.header.dwType {
         RIM_TYPEKEYBOARD => {
             let kb = raw.data.keyboard;
-            t.on_key(kb.VKey, kb.Flags & RI_KEY_BREAK == 0);
+            let down = kb.Flags & RI_KEY_BREAK == 0;
+            if down && !CTRL_KEYS.contains(&kb.VKey) {
+                PRESSES.fetch_add(1, Ordering::Relaxed);
+            }
+            t.on_key(kb.VKey, down);
         }
         RIM_TYPEMOUSE => {
             let m = raw.data.mouse;
@@ -113,6 +131,9 @@ unsafe fn handle_input(h: HRAWINPUT) {
                 t.on_move(m.lLastX, m.lLastY);
             }
             let flags = m.Anonymous.Anonymous.usButtonFlags;
+            if flags & MOUSE_PRESSES != 0 {
+                PRESSES.fetch_add(1, Ordering::Relaxed);
+            }
             if flags != 0 {
                 t.on_buttons(flags);
             }

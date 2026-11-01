@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appFolderFor, driveOf, errorText, isDriveRoot } from './setup';
+import { appFolderFor, dirHint, driveOf, errorText, isDriveRoot, pickDir, samePath } from './setup';
 
 describe('isDriveRoot', () => {
   it('узнаёт корень в любом написании', () => {
@@ -40,5 +40,37 @@ describe('errorText', () => {
   });
   it('прочее — общей фразой', () => {
     for (const e of [undefined, null, {}, '', '  ', new Error('')]) expect(errorText(e)).toMatch(/не так/);
+  });
+});
+
+describe('pickDir', () => {
+  it('корень диска меняет на подпапку и запоминает корень', () => {
+    expect(pickDir(' d:\\ ', null)).toEqual({ dir: 'D:\\DeskPartner', root: 'd:\\' });
+  });
+  it('корень, от подпапки которого отказались, оставляет как есть', () => {
+    expect(pickDir('D:\\', 'D:\\')).toEqual({ dir: 'D:\\', root: null });
+  });
+  it('обычную папку не трогает', () => {
+    expect(pickDir('E:\\Pets', null)).toEqual({ dir: 'E:\\Pets', root: null });
+  });
+});
+
+describe('dirHint', () => {
+  it('последняя — папка пользователя, остальные — диски', () => {
+    expect(dirHint(0, 2, 'D:\\DeskPartner')).toBe('отдельный диск D:');
+    expect(dirHint(1, 2, 'C:\\Users\\vlad\\DeskPartner')).toBe('в папке пользователя, на системном диске');
+  });
+  it('без буквы диска — просто «отдельный диск»', () => {
+    expect(dirHint(0, 2, '\\\\server\\share')).toBe('отдельный диск');
+  });
+});
+
+describe('samePath', () => {
+  it('не замечает регистр, слэши и хвостовой разделитель', () => {
+    expect(samePath('D:\\DeskPartner', ' d:/deskpartner/ ')).toBe(true);
+  });
+  it('разные папки и пустая строка — не то же самое', () => {
+    expect(samePath('D:\\DeskPartner', 'E:\\DeskPartner')).toBe(false);
+    expect(samePath('', '')).toBe(false);
   });
 });

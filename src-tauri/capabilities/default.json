@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Окна питомца, миски и первого запуска",
-  "windows": ["pet", "bowl", "setup"],
+  "description": "Окна питомца, миски, первого запуска, настроек, меню и лазера",
+  "windows": ["pet", "bowl", "setup", "settings", "menu", "laser", "push"],
   "permissions": ["core:default"]
 }

@@ -44,8 +44,12 @@ export function isHungry(b: Belly): boolean {
   return b.sinceMeal >= HUNGRY_AFTER_MS;
 }
 
-/** Один кадр жизни. Чистая функция: возвращает новый объект и событие, вход не трогает. */
-export function step(b: Belly, ms: number, feederOn: boolean): [Belly, BellyEvent | null] {
+/**
+ * Один кадр жизни. Чистая функция: возвращает новый объект и событие, вход не трогает.
+ * Насыпанное в кормушку голодная съедает всегда: выключенная кормушка меняет только то, что делает
+ * клик по миске, а запас не прячет — иначе корм «пропадал» на глазах.
+ */
+export function step(b: Belly, ms: number): [Belly, BellyEvent | null] {
   const dt = Math.min(Math.max(ms, 0), MAX_STEP_MS) || 0;
   if (b.gone) return [b, null];
 
@@ -61,7 +65,7 @@ export function step(b: Belly, ms: number, feederOn: boolean): [Belly, BellyEven
     return [{ ...n, away: 0, sinceMeal: 0 }, 'return'];
   }
 
-  if (isHungry(n) && feederOn && n.feeder > 0) return [{ ...n, feeder: n.feeder - 1, sinceMeal: 0 }, 'eat'];
+  if (isHungry(n) && n.feeder > 0) return [{ ...n, feeder: n.feeder - 1, sinceMeal: 0 }, 'eat'];
 
   if (n.sinceMeal >= HUNGRY_AFTER_MS + FORAGE_AFTER_MS) return [{ ...n, away: FORAGE_MS }, 'leave'];
 

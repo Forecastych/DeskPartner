@@ -19,6 +19,7 @@ export const PALETTE: Record<string, string> = {
   w: '#ffffff', // блик в глазу
   h: '#e2556b', // сердечко
   z: '#bcd4ff', // «з-з-з» во сне
+  s: '#ffd34d', // звёздочки, когда врезалась
   B: '#26324a', // контур миски — свой, чтобы клик по миске отличался от клика по кошке
   b: '#5b8fd9', // миска
   c: '#c98d4b', // корм
@@ -28,8 +29,8 @@ export const PALETTE: Record<string, string> = {
 /** Миска и корм в ней: клик сюда кормит, а не гладит. */
 const BOWL_KEYS = new Set(['B', 'b', 'c', 'C']);
 
-/** Украшения не часть зверя: клик по сердечку или «з-з-з» проходит насквозь. */
-const DECOR = new Set(['h', 'z']);
+/** Украшения не часть зверя: клик по сердечку, «з-з-з» или звёздочкам проходит насквозь. */
+const DECOR = new Set(['h', 'z', 's']);
 
 // Голова анфас, 12×10: кошка идёт боком, но смотрит на человека.
 const HEAD_TOP: Part = [
@@ -431,6 +432,35 @@ function eating(fat: Fat, headY: number, tail: Part): Frame {
   );
 }
 
+/** Галоп, сбор: лапы подобраны под себя, кошка на миг над землёй; голова клюёт вниз. */
+function gathered(fat: Fat): Frame {
+  const legs = [6, 9, 13, 16].map((x): [Part, number, number] => [leg(5 - fat), x, 26 + fat]);
+  return compose([TAIL_BACK, 0, 19], [sideBody(fat), 4, 19], ...legs, [head(EYES_OPEN), 16, 14]);
+}
+
+/**
+ * Засада на лазер: туловище прижато к земле на два ряда ниже, голова вытянута вперёд и вниз,
+ * хвост низко и неподвижно. `wiggle` — задние лапы переступают: зад «ёрзает» перед прыжком.
+ */
+function crouching(fat: Fat, wiggle: boolean): Frame {
+  const legs = [...BACK, ...FRONT].map((x, i): [Part, number, number] => [leg(4 - fat), x - (wiggle && i < 2 ? 1 : 0), 28 + fat]);
+  return compose([TAIL_BACK, 0, 22], [sideBody(fat), 4, 21], ...legs, [head(EYES_OPEN), 17, 15]);
+}
+
+const STAR: Part = ['.s.', 'sss', '.s.'];
+
+/** Врезалась в край окна: отпрянула на пиксель, уши прижаты, глаза зажмурены, хвост ёршиком, над головой звёздочки. */
+function bonked(fat: Fat, stars: [number, number][]): Frame {
+  const legs = [...BACK, ...FRONT].map((x): [Part, number, number] => [leg(6 - fat), x, 26 + fat]);
+  return compose(
+    [TAIL_PUFF, 0, 12],
+    [sideBody(fat), 4, 19],
+    ...legs,
+    [head(EYES_SHUT, HEAD_MEOW, HEAD_FLAT), 15, 14],
+    ...stars.map(([x, y]): [Part, number, number] => [STAR, x, y]),
+  );
+}
+
 export interface Anim {
   frames: Frame[];
   /** Сколько держится один кадр. */
@@ -461,6 +491,22 @@ function build(fat: Fat) {
     jump: {
       ms: 200,
       frames: [leaping(fat, TAIL_BACK), leaping(fat, TAIL_BACK_FLICK)],
+    },
+    // охота за лазером: галоп вдвое чаще шага, засада, «бум» об край окна
+    run: {
+      ms: 90,
+      frames: [leaping(fat, TAIL_BACK), gathered(fat)],
+    },
+    crouch: {
+      ms: 220,
+      frames: [crouching(fat, false), crouching(fat, true)],
+    },
+    bonk: {
+      ms: 200,
+      frames: [
+        bonked(fat, [[26, 9], [29, 12]]),
+        bonked(fat, [[28, 8], [24, 11]]),
+      ],
     },
     fall: {
       ms: 150,

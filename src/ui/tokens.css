@@ -1,0 +1,82 @@
+/* Токены пиксельного вида. Здесь только переменные и классы, которые надо позвать явно:
+   CSS у всех окон один, а окно питомца должно остаться прозрачным и без чужих стилей. */
+:root {
+  /* Палитра: тёплая, как шерсть кошки. ink — контур, им обведено всё, что «нарисовано». */
+  --ui-bg: #faf8f5;
+  --ui-card: #fffdf9;
+  --ui-soft: #f6e9df;
+  --ui-text: #2e2219;
+  --ui-muted: #76665a;
+  --ui-ink: #3b2a1e;
+  --ui-line: #e2d4c4;
+  --ui-accent: #a85a26;
+  --ui-accent-hi: #c4743a;
+  --ui-accent-lo: #7d3f17;
+  --ui-on-accent: #fff8ee;
+  --ui-drop: #d8c4ae;
+  --ui-danger: #a3241c;
+  --ui-danger-bg: #fbe3df;
+
+  /* Пиксель интерфейса: толщина контура, ступенька угла и шаг тени. */
+  --ui-b: 3px;
+  --ui-lift: 3px;
+  /* Отступы — кратны пикселю, чтобы всё ложилось на одну сетку. */
+  --ui-s1: 4px;
+  --ui-s2: 8px;
+  --ui-s3: 12px;
+  --ui-s4: 16px;
+  --ui-s5: 24px;
+
+  /* Только системные шрифты: окно работает без сети и ничего не качает. */
+  --ui-font: 14px/1.45 'Segoe UI', system-ui, sans-serif;
+  --ui-font-pixel: 'Cascadia Mono', Consolas, 'Lucida Console', monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ui-bg: #221c18;
+    --ui-card: #2e2621;
+    --ui-soft: #3a2d24;
+    --ui-text: #f0e7de;
+    --ui-muted: #ab9d91;
+    --ui-ink: #0f0a07;
+    --ui-line: #463a31;
+    --ui-accent: #e39a63;
+    --ui-accent-hi: #f0b585;
+    --ui-accent-lo: #b86d38;
+    --ui-on-accent: #221c18;
+    --ui-drop: #0a0705;
+    --ui-danger: #ff8f84;
+    --ui-danger-bg: #3d2220;
+  }
+}
+
+/* Пиксельная рамка: четыре полосы контура снаружи блока, углы пустые — выходит ступенька,
+   как у спрайта. Последняя тень — жёсткая, без размытия. Цвет контура и тени меняют через
+   --edge и --drop, нажатие — через --lift: 0. Тени рисуются снаружи, поэтому соседям нужен
+   зазор не меньше --ui-b. */
+.ui-px {
+  --edge: var(--ui-ink);
+  --drop: var(--ui-drop);
+  --lift: var(--ui-lift);
+  box-shadow:
+    0 calc(var(--ui-b) * -1) 0 0 var(--edge),
+    0 var(--ui-b) 0 0 var(--edge),
+    calc(var(--ui-b) * -1) 0 0 0 var(--edge),
+    var(--ui-b) 0 0 0 var(--edge),
+    calc(var(--ui-b) + var(--lift)) calc(var(--ui-b) + var(--lift)) 0 0 var(--drop);
+}
+
+.ui-mono {
+  font-family: var(--ui-font-pixel);
+  user-select: text;
+}
+
+/* Только для экранного диктора */
+.ui-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

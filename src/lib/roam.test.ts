@@ -2,10 +2,23 @@ import { describe, expect, it } from 'vitest';
 import {
   arcY,
   atBowl,
+  BONK_COOL,
+  BONK_MS,
   bowlAt,
   BOWL_INSET,
+  chase,
+  CHASE_JUMP,
+  type ChaseEvent,
+  CROUCH_MS,
+  DEAD,
+  type Dot,
   EDGE_GAP,
+  endChase,
   enter,
+  isRunning,
+  POUNCE_MS,
+  RECOIL,
+  RUN,
   goTo,
   jumpMs,
   JUMP_MAX_MS,
@@ -650,5 +663,280 @@ describe('миска', () => {
     expect(atBowl(pet, w)).toBe(false);
     [pet] = run(pet, w, 60_000);
     expect(atBowl(pet, w)).toBe(true);
+  });
+});
+
+describe('охота за лазером', () => {
+  type Ev = RoamEvent | ChaseEvent;
+  /**
+   * Охотиться `ms` кадрами по 50 мс за точкой (постоянной или функцией времени от начала):
+   * события с временем конца кадра и смена режимов движения.
+   */
+  function hunt(pet: Pet, w: World, dot: Dot | ((t: number) => Dot), ms: number): [Pet, [number, Ev][], Move[]] {
+    const at = typeof dot === 'function' ? dot : () => dot;
+    const events: [number, Ev][] = [];
+    const moves: Move[] = [pet.move];
+    for (let t = 0; t < ms; t += FRAME) {
+      const [next, e] = chase(pet, w, at(t), Math.min(FRAME, ms - t));
+      pet = next;
+      if (e) events.push([t + FRAME, e]);
+      if (moves[moves.length - 1] !== pet.move) moves.push(pet.move);
+    }
+    return [pet, events, moves];
+  }
+  const names = (es: [number, Ev][]): Ev[] => es.map(([, e]) => e);
+  /** Охотиться, пока не выполнится условие (не дольше max мс). */
+  function until(pet: Pet, w: World, dot: Dot, done: (p: Pet, e: Ev | null) => boolean, max = 20_000): Pet {
+    for (let t = 0; t < max; t += FRAME) {
+      const [next, e] = chase(pet, w, dot, FRAME);
+      pet = next;
+      if (done(pet, e)) return pet;
+    }
+    throw new Error('не дождались');
+  }
+
+  const w = world([FHD]);
+  /** Окно 7 — карниз 600..1100 на y = 600; справа к нему вплотную окно 8 повыше — стена. */
+  const walled = world([FHD], [ledge(7, 600, 600, 1100), ledge(8, 1100, 300, 1500)]);
+  const open = world([FHD], [ledge(7, 600, 600, 1100)]);
+  const perched = (wd: World, x: number): Pet => ({ ...standing(wd, x), y: 600, on: 'ledge:7:600', hwnd: 7, dx: x - 600 });
+
+  it('бежит к точке со скоростью RUN = 3·WALK и смотрит на неё', () => {
+    expect(RUN).toBe(3 * WALK);
+    const [r, events, moves] = hunt({ ...standing(w, 500), facing: -1 }, w, { x: 1500, y: 900 }, 1000);
+    expect(events).toEqual([]);
+    expect(moves).toEqual(['still', 'walk']);
+    expect(r).toMatchObject({ x: 500 + RUN, facing: 1, on: 'floor:0', goal: { surface: 'floor:0', x: 1500 } });
+    expect(isRunning(r)).toBe(true);
+    const [l] = hunt({ ...standing(w, 500), facing: 1 }, w, { x: 100, y: 900 }, 1000);
+    expect(l).toMatchObject({ x: 500 - RUN, facing: -1 });
+    // на 150% — в полтора раза быстрее
+    const big = world([monitor(0, 0, 1920, 1080, 1.5)]);
+    const [b] = hunt(standing(big, 500), big, { x: 1500, y: 900 }, 1000);
+    expect(b.x - 500).toBeCloseTo(RUN * 1.5, 9);
+  });
+
+  it('цель меняется вслед за точкой на каждом кадре', () => {
+    const [p] = hunt(standing(w, 500), w, (t) => ({ x: t < 500 ? 1500 : 100, y: 900 }), 1000);
+    expect(p.facing).toBe(-1);
+    expect(p.x).toBeCloseTo(500, 9);
+  });
+
+  it('мёртвая зона: дрожащая рядом точка не дёргает и не разворачивает', () => {
+    // Дрожит на ±20 px — дальше STILL_R, так что не «замерла», но ближе DEAD: стоит как стояла.
+    const jitter = (t: number): Dot => ({ x: 500 + ((t / FRAME) % 2 ? 20 : -20), y: 900 });
+    expect(20).toBeLessThan(DEAD);
+    const [s, events, moves] = hunt({ ...standing(w, 500), facing: 1 }, w, jitter, 3000);
+    expect(events).toEqual([]);
+    expect(moves).toEqual(['still']);
+    expect(s).toMatchObject({ x: 500, facing: 1, move: 'still', goal: null });
+    // бежит вправо, точка оказалась чуть позади — останавливается, не разворачиваясь
+    const [r] = hunt(standing(w, 500), w, { x: 1500, y: 900 }, 1000);
+    const [stop] = hunt(r, w, { x: r.x - 20, y: 900 }, 200);
+    expect(stop).toMatchObject({ x: r.x, facing: 1, move: 'still' });
+    // точка отошла дальше мёртвой зоны — снова бежит
+    const [go] = hunt(stop, w, { x: r.x - DEAD - 30, y: 900 }, 100);
+    expect(go).toMatchObject({ move: 'walk', facing: -1 });
+  });
+
+  it('замершая рядом точка: через CROUCH_MS припадает, через POUNCE_MS прыгает на неё', () => {
+    const dot = { x: 650, y: 1000 };
+    const [p, events] = hunt(standing(w, 500), w, dot, 1800);
+    // до припада бежала 9 кадров по 6 px
+    const from = 500 + 9 * ((RUN * FRAME) / 1000);
+    const ms = jumpMs(dot.x - from) * CHASE_JUMP;
+    expect(events).toEqual([
+      [CROUCH_MS, 'crouch'],
+      [CROUCH_MS + POUNCE_MS, 'pounce'],
+      [CROUCH_MS + POUNCE_MS + Math.ceil(ms / FRAME) * FRAME, 'landed'],
+    ]);
+    expect(p).toMatchObject({ x: 650, y: 1040, on: 'floor:0', move: 'still', facing: 1 });
+    expect(p.hunt?.mode).toBe('run');
+
+    // в припаде стоит на месте мордой к точке; прыжок короче обычного
+    const [crouched] = hunt(standing(w, 500), w, dot, CROUCH_MS);
+    expect(crouched).toMatchObject({ x: from, move: 'still', facing: 1 });
+    expect(crouched.hunt?.mode).toBe('crouch');
+    expect(isRunning(crouched)).toBe(false);
+    const [still] = hunt(crouched, w, dot, POUNCE_MS - FRAME);
+    expect(still).toMatchObject({ x: from, move: 'still' });
+    const [leaping, e] = chase(still, w, dot, FRAME);
+    expect(e).toBe('pounce');
+    expect(leaping.move).toBe('jump');
+    expect(leaping.jump).toMatchObject({ x1: 650, y1: 1040, to: 'floor:0', ms });
+
+    // точка так и стоит — после приземления выжидает заново и прыгает снова
+    const [, again] = hunt(p, w, dot, CROUCH_MS + POUNCE_MS);
+    expect(names(again)).toEqual(['crouch', 'pounce', 'landed']);
+  });
+
+  it('точка ушла из-под носа во время припада — снова бежит, прыжка нет', () => {
+    const dot = (t: number): Dot => (t < 800 ? { x: 650, y: 1000 } : { x: 1500, y: 1000 });
+    const [p, events] = hunt(standing(w, 500), w, dot, 1500);
+    expect(names(events)).toEqual(['crouch']);
+    expect(p.hunt?.mode).toBe('run');
+    expect(p).toMatchObject({ move: 'walk', facing: 1 });
+    expect(isRunning(p)).toBe(true);
+    expect(p.x).toBeGreaterThan(560);
+  });
+
+  it('точка высоко над полом — стоит под ней, не припадает', () => {
+    const [p, events] = hunt(standing(w, 500), w, { x: 700, y: 300 }, 5000);
+    expect(events).toEqual([]);
+    expect(p).toMatchObject({ x: 700, move: 'still', facing: 1 });
+  });
+
+  it('с разбегу врезается в рамку окна повыше: bonk, отскок, у стены стоит', () => {
+    const dot = { x: 1300, y: 580 };
+    const edge = 1100 - HALF;
+    let e: Ev | null = null;
+    const p = until(perched(walled, 700), walled, dot, (_, ev) => (e = ev) !== null);
+    expect(e).toBe('bonk');
+    expect(p).toMatchObject({ x: edge, y: 600, on: 'ledge:7:600', move: 'still', facing: 1, goal: null });
+    expect(p.hunt).toMatchObject({ mode: 'bonk', cool: BONK_COOL });
+    expect(isRunning(p)).toBe(false);
+    const [back, after] = hunt(p, walled, dot, BONK_MS);
+    expect(after).toEqual([]);
+    expect(back.x).toBeCloseTo(edge - RECOIL, 6);
+    expect(back).toMatchObject({ facing: 1, on: 'ledge:7:600', dx: back.x - 600 });
+    // точка всё там же — второй раз не бьётся: стоит у стены
+    const [s, rest] = hunt(back, walled, dot, 5000);
+    expect(rest).toEqual([]);
+    expect(s).toMatchObject({ x: back.x, move: 'still', on: 'ledge:7:600' });
+  });
+
+  it('между ударами — не меньше BONK_COOL; в паузе у стены просто тормозит', () => {
+    const p = until(perched(walled, 700), walled, { x: 1300, y: 580 }, (_, e) => e === 'bonk');
+    // 700 мс точка мечется на ±15 px у 915 (не замирает), потом 700 мс за стеной, и так по кругу
+    const dot = (t: number): Dot =>
+      t % 1400 < 700 ? { x: 915 + ((t / FRAME) % 2 ? 15 : -15), y: 580 } : { x: 1300, y: 580 };
+    const [, first] = hunt(p, walled, dot, 1400);
+    expect(first).toEqual([]); // добежала до стены на 1.3 с — ещё пауза
+    const [s] = hunt(p, walled, dot, 1350);
+    expect(s).toMatchObject({ x: 1100 - HALF, move: 'still' });
+    const [, events] = hunt(p, walled, dot, 7000);
+    const times = events.map(([t]) => t);
+    expect(names(events).every((e) => e === 'bonk')).toBe(true);
+    expect(times.length).toBeGreaterThanOrEqual(2);
+    for (let i = 1; i < times.length; i++) expect(times[i] - times[i - 1]).toBeGreaterThanOrEqual(BONK_COOL);
+    expect(times[0]).toBeGreaterThanOrEqual(BONK_COOL);
+  });
+
+  it('врезается только с разбега: стоя у стены — нет', () => {
+    const [, events] = hunt(perched(walled, 1100 - HALF - 10), walled, { x: 1300, y: 580 }, 3000);
+    expect(events).toEqual([]);
+  });
+
+  it('край экрана — тоже стена; край к соседнему монитору — нет', () => {
+    const dot = { x: 1910, y: 1000 };
+    const [p, events] = hunt(standing(w, 1500), w, dot, 4000);
+    expect(names(events)).toEqual(['bonk']);
+    expect(p).toMatchObject({ facing: 1, on: 'floor:0' });
+    expect(events[0][0]).toBe(Math.ceil((1920 - HALF - 1500) / ((RUN * FRAME) / 1000)) * FRAME);
+    const two = world([FHD, monitor(1920, 0, 1920, 1080)]);
+    const [, e2] = hunt(standing(two, 1500), two, dot, 4000);
+    expect(names(e2)).not.toContain('bonk');
+  });
+
+  it('конец карниза без стены: точка висит на уровне в пустоте — тормозит; опустилась — спрыгивает', () => {
+    const [p, events] = hunt(perched(open, 900), open, { x: 1300, y: 590 }, 3000);
+    expect(names(events)).toEqual(['bonk']);
+    expect(p).toMatchObject({ on: 'ledge:7:600', facing: 1 });
+    const low = { x: 1300, y: 900 };
+    const [, e2, moves] = hunt(p, open, low, 3000);
+    expect(moves).toContain('fall');
+    expect(e2[0][1]).toBe('landed');
+    const q = until(p, open, low, (c, e) => e === 'landed' && Math.abs(c.x - 1300) <= DEAD);
+    expect(q).toMatchObject({ on: 'floor:0', y: 1040 });
+  });
+
+  it('точка над карнизом — запрыгивает туда прыжком охоты (короче обычного)', () => {
+    const dot = { x: 850, y: 500 };
+    const start = until(standing(open, 300), open, dot, (p) => p.move === 'jump');
+    expect(start.x).toBe(850);
+    expect(start.jump).toMatchObject({ to: 'ledge:7:600', y1: 600, ms: jumpMs(440) * CHASE_JUMP });
+    let e: Ev | null = null;
+    const p = until(start, open, dot, (_, ev) => (e = ev) !== null);
+    expect(e).toBe('landed');
+    expect(p).toMatchObject({ x: 850, y: 600, on: 'ledge:7:600', hwnd: 7, dx: 250 });
+  });
+
+  it('точка на полу, кошка на карнизе — сходит с ближнего края и падает к ней', () => {
+    const dot = { x: 300, y: 1000 };
+    const [, events, moves] = hunt(perched(open, 800), open, dot, 3000);
+    expect(moves.slice(0, 3)).toEqual(['still', 'walk', 'fall']);
+    expect(events[0][1]).toBe('landed');
+    const p = until(perched(open, 800), open, dot, (c, e) => e === 'landed' && Math.abs(c.x - 300) <= DEAD);
+    expect(p).toMatchObject({ on: 'floor:0', y: 1040 });
+  });
+
+  it('точка на другом мониторе — переходит туда', () => {
+    const two = world([FHD, monitor(1920, 0, 1920, 1080)]);
+    const [p] = hunt(standing(two, 1700), two, { x: 2300, y: 600 }, 10_000);
+    expect(p).toMatchObject({ on: 'floor:1', x: 2300 });
+  });
+
+  it('точка вне экрана — не видна: стоящая не реагирует, бегущая добегает до прежней цели', () => {
+    const s = standing(w, 500);
+    expect(chase(s, w, { x: -500, y: 300 }, FRAME)).toEqual([s, null]);
+    expect(chase(s, w, { x: 500, y: 5000 }, FRAME)[0]).toBe(s);
+    const [r] = hunt(s, w, { x: 1500, y: 900 }, 500);
+    const [n, e] = chase(r, w, { x: 5000, y: 900 }, FRAME);
+    expect(e).toBeNull();
+    expect(n.x).toBe(r.x + (RUN * FRAME) / 1000);
+    expect(n.hunt).toEqual(r.hunt);
+  });
+
+  it('ушедшая за край — охота ничего не делает', () => {
+    const out = outside(w);
+    expect(chase(out, w, { x: 1000, y: 900 }, FRAME)).toEqual([out, null]);
+  });
+
+  it('охота отменяет уход и не присылает arrived', () => {
+    const p = leave(standing(w, 500), w);
+    const [r, events] = hunt(p, w, (t) => ({ x: t < 1000 ? 700 : 400, y: 300 }), 6000);
+    expect(r.exit).toBe(0);
+    expect(names(events)).not.toContain('arrived');
+    expect(r).toMatchObject({ x: 400, move: 'still', on: 'floor:0' });
+  });
+
+  it('step после охоты продолжает чисто: без цели погони, прыжок доводит до конца', () => {
+    const [r] = hunt(standing(w, 500), w, { x: 1500, y: 900 }, 1000);
+    const [s, e] = step(r, w, FRAME);
+    expect(e).toBeNull();
+    expect('hunt' in s).toBe(false);
+    expect(s).toMatchObject({ x: r.x, move: 'still', goal: null });
+    expect(isRunning(s)).toBe(false);
+    // дальше — обычная прогулка шагом
+    const [walk] = run(goTo(s, w, { surface: 'floor:0', x: 1500 }), w, 1000);
+    expect(walk.x).toBe(r.x + WALK);
+
+    // посреди прыжка на точку
+    const mid = until(standing(w, 500), w, { x: 650, y: 1000 }, (p) => p.move === 'jump' && p.jump!.t > 0);
+    const [landed, events, moves] = run(mid, w, 2000);
+    expect(events).toEqual(['landed']);
+    expect(moves).toEqual(['jump', 'still']);
+    expect(landed).toMatchObject({ x: 650, y: 1040, on: 'floor:0', goal: null });
+    expect('hunt' in landed).toBe(false);
+  });
+
+  it('endChase: снимает охоту и цель, прыжок не трогает; без охоты — тот же объект', () => {
+    const [r] = hunt(standing(w, 500), w, { x: 1500, y: 900 }, 1000);
+    const e = endChase(r);
+    expect('hunt' in e).toBe(false);
+    expect(e).toMatchObject({ x: r.x, move: 'still', goal: null });
+    const mid = until(standing(w, 500), w, { x: 650, y: 1000 }, (p) => p.move === 'jump');
+    expect(endChase(mid)).toMatchObject({ move: 'jump', jump: mid.jump });
+    const s = standing(w, 500);
+    expect(endChase(s)).toBe(s);
+  });
+
+  it('не меняет вход; spotOf охотницы — прежнего вида', () => {
+    const [r] = hunt(standing(w, 500), w, { x: 1500, y: 900 }, 1000);
+    const copy = structuredClone(r);
+    chase(r, w, { x: 100, y: 900 }, FRAME);
+    endChase(r);
+    expect(r).toEqual(copy);
+    expect(Object.keys(spotOf(r)).sort()).toEqual(['exit', 'x', 'y']);
   });
 });

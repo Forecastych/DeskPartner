@@ -1,10 +1,11 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { emitTo, listen } from '@tauri-apps/api/event';
+  import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { onMount } from 'svelte';
   import { feedBowl, fresh, isHungry, load, refill, save, step, takeOut, type Belly } from './lib/hunger';
   import * as roam from './lib/roam';
-  import { parse } from './lib/settings';
+  import { parse, serialize, type Settings } from './lib/settings';
   import * as sleepy from './lib/sleep';
   import { ANIMS, BOWL_X, bowlLeft, draw, fatOn, flip, ground, hitMask, onBowl, SIZE, type AnimName, type Frame } from './lib/sprite';
   import { localLegacy, memoryStore, open, tauriBackend, type Store } from './lib/store';
@@ -22,6 +23,8 @@
   const GROOM_MS = 6000;
   /** Ест столько, потом умывается. */
   const EAT_MS = 8000;
+  /** Сколько стоит со звёздочками, врезавшись в край окна на охоте. */
+  const BONK_MS = 800;
   /** Шаг движения: 25 раз в секунду — окно едет ровно, а Rust успевает его двигать. */
   const MOVE_MS = 40;
   /** Мониторы и окна перечитываются раз в секунду; пока кошка сидит на чужом окне — чаще: его могут потащить. */
@@ -80,8 +83,10 @@
     }
   }
 
-  /** Галочка «Кормушка» из настроек первого запуска; меню, когда появится, будет писать туда же. */
+  /** Галочка «Кормушка»: из файла настроек, ПКМ-меню кошки или окна настроек. */
   let feederOn = false;
+  /** Окно настроек переносит папку данных: до перезапуска ничего не пишем, иначе запись уйдёт мимо переезда. */
+  let frozen = false;
   let belly: Belly = fresh();
   let nap: sleepy.Sleep = sleepy.fresh();
   let stats: Stats = { fed: 0, petted: 0 };
@@ -105,6 +110,12 @@
   /** Мониторы и окна-насесты; null — Rust их не дал (не Windows или ошибка), кошка стоит, где поставили. */
   let world: roam.World | null = null;
   let pet: roam.Pet | null = null;
+  /** Лазерная точка, физ. px рабочего стола; null — лазер выключен. */
+  let dot: roam.Dot | null = null;
+  /** На прошлом шаге охотилась: бросила — снять охоту один раз. */
+  let hunted = false;
+  /** Врезалась — до этих пор ошалело стоит со звёздочками. */
+  let bonkUntil = 0;
   /** Вернулась из-за края — умывается, когда дойдёт до места. */
   let groomOnArrival = false;
   let surveying = false;
@@ -117,6 +128,7 @@
   let timer: ReturnType<typeof setTimeout>;
 
   function persist(now: number) {
+    if (frozen) return;
     lastSave = now;
     store.set('belly', save(belly));
     store.set('sleep', sleepy.save(nap));
@@ -124,9 +136,9 @@
     if (pet) store.set('spot', JSON.stringify(roam.spotOf(pet)));
   }
 
-  /** Окно миски рисует корм: в кормушке — порции, без неё — насыпанное, пока кошка идёт есть. */
+  /** Окно миски рисует корм: запас кормушки (виден и при выключенной) и насыпанное, пока кошка идёт есть. */
   function tellBowl() {
-    const portions = (feederOn ? belly.feeder : 0) + (mealPending ? 1 : 0);
+    const portions = belly.feeder + (mealPending ? 1 : 0);
     const key = String(portions);
     if (key === lastBowl) return;
     lastBowl = key;
@@ -138,7 +150,7 @@
 
   /** К миске; у миски — мордой к ней, она справа. */
   function toBowl() {
-    if (!pet || !world || pet.move === 'out' || away()) return;
+    if (!pet || !world || pet.move === 'out' || away() || pet.hunt) return;
     const b = roam.bowlAt(world);
     if (!b) return;
     if (roam.atBowl(pet, world)) pet = { ...pet, facing: -1 };
@@ -157,15 +169,18 @@
   }
 
   /**
-   * Клик по миске — в окне кошки (поза hungry) или в отдельном окне миски. С кормушкой ЛКМ досыпает
-   * порцию (кошка съест её сама, когда проголодается), ПКМ забирает. Без кормушки сытой кошке не насыпают.
+   * Клик по миске — в окне кошки (поза hungry) или в отдельном окне миски. ПКМ забирает порцию из запаса.
+   * С кормушкой ЛКМ досыпает порцию (кошка съест её сама, когда проголодается), без неё — кормит сейчас,
+   * и сытой кошке не насыпают.
    */
   function bowlClick(button: number, now: number) {
-    if (feederOn) {
-      belly = button === 2 ? takeOut(belly) : refill(belly);
-      if (button !== 2) stats.fed++;
+    if (button === 2) {
+      belly = takeOut(belly);
+    } else if (feederOn) {
+      belly = refill(belly);
+      stats.fed++;
     } else {
-      if (button === 2 || mealPending) return;
+      if (mealPending) return;
       const fed = feedBowl(belly);
       if (fed === belly) return;
       belly = fed;
@@ -203,7 +218,7 @@
 
   /** Перебраться на другое место: посидеть у края пола или на окне, поспать — лучше на окне. */
   function wander(kind: 'rest' | 'sleep') {
-    if (pet && world && pet.move !== 'out' && !away()) pet = roam.goTo(pet, world, roam.pickSpot(world, pet, kind, Math.random));
+    if (pet && world && pet.move !== 'out' && !away() && !pet.hunt) pet = roam.goTo(pet, world, roam.pickSpot(world, pet, kind, Math.random));
   }
 
   /**
@@ -225,7 +240,7 @@
   function live(now: number) {
     const dt = now - lastStep;
     lastStep = now;
-    const [next, event] = step(belly, dt, feederOn);
+    const [next, event] = step(belly, dt);
     belly = next;
     if (event === 'eat') serve(now);
     // поела где-то там
@@ -257,8 +272,23 @@
     if (event || mood || now - lastSave >= SAVE_MS) persist(now);
   }
 
+  /**
+   * Охотится, пока светит лазер, — бодрая и дома. Спящую точка не будит, едящую не отвлекает:
+   * лазер — игра, а не побудка.
+   */
+  function hunting(now: number): boolean {
+    return dot !== null && !!pet && !!world && pet.move !== 'out' && !away() && sleepy.mood(nap) === 'awake' && now >= eatUntil;
+  }
+
   /** Поза на сейчас; null — кошки на экране нет. */
   function choose(now: number): AnimName | null {
+    if (pet?.hunt) {
+      if (now < bonkUntil || pet.hunt.mode === 'bonk') return 'bonk';
+      if (roam.isRunning(pet)) return 'run';
+      if (pet.hunt.mode === 'crouch' && pet.move === 'still') return 'crouch';
+      // прыжок на точку, падение с карниза — те же позы, что в пути; стоит в мёртвой зоне — следит
+      return pet.move === 'still' ? 'stand' : pet.move === 'out' ? null : pet.move;
+    }
     // в пути — только ходьба, прыжок или падение, чем бы ни была занята голова
     if (pet && pet.move !== 'still' && pet.move !== 'out') return pet.move;
     if (belly.gone || belly.away > 0) return null;
@@ -325,9 +355,21 @@
     const dt = now - lastMove;
     lastMove = now;
     if (pet && world) {
-      const was = pet.move;
-      const [next, event] = roam.step(pet, world, dt);
-      pet = next;
+      const was = `${pet.move} ${pet.hunt?.mode}`;
+      let event: ReturnType<typeof roam.chase>[1] = null;
+      if (dot && hunting(now)) {
+        // отскочила от стены — дальше ошалело стоит со звёздочками, пока не придёт в себя
+        if (now >= bonkUntil || pet.hunt?.mode === 'bonk') [pet, event] = roam.chase(pet, world, dot, dt);
+        hunted = true;
+        if (event === 'bonk') bonkUntil = now + BONK_MS;
+      } else {
+        if (hunted) {
+          hunted = false;
+          bonkUntil = 0;
+          pet = roam.endChase(pet);
+        }
+        [pet, event] = roam.step(pet, world, dt);
+      }
       if (event === 'arrived' && groomOnArrival) {
         groomOnArrival = false;
         groomUntil = now + GROOM_MS;
@@ -342,7 +384,7 @@
       // дошла, приземлилась или сорвалась — поза меняется сразу, не дожидаясь следующего кадра анимации
       // место — в хранилище на каждой остановке: перезапуск не должен уносить её в угол
       if (event === 'arrived' || event === 'gone') persist(now);
-      if (pet.move !== was) render();
+      if (`${pet.move} ${pet.hunt?.mode}` !== was) render();
       else place();
     }
     if (now - lastWorld >= (pet?.hwnd != null ? PERCH_WORLD_MS : WORLD_MS)) survey();
@@ -393,11 +435,48 @@
     const y = Math.floor(((e.clientY - r.top) / r.height) * SIZE);
     const now = Date.now();
     if (onBowl(frame, x, y)) return bowlClick(e.button, now);
+    if (e.button === 2) return void showMenu();
     if (e.button === 0 && !disturb(now)) {
       pettedUntil = now + PETTED_MS;
       stats.petted++;
     }
     render();
+  }
+
+  /** Настройки сменились здесь или в окне настроек — кошка и миска подстраиваются сразу. */
+  function applySettings(s: Settings) {
+    feederOn = s.feeder;
+    invoke('set_capture_hidden', { hidden: s.hideFromCapture }).catch(console.error);
+    tellBowl();
+  }
+
+  /** Галочка в ПКМ-меню: сохранить, применить и показать открытому окну настроек. */
+  function toggle(field: 'feeder' | 'hideFromCapture') {
+    if (frozen) return;
+    const s = parse(store.get('settings'));
+    s[field] = !s[field];
+    store.set('settings', serialize(s));
+    applySettings(s);
+    emitTo('settings', 'settings', s).catch(console.error);
+  }
+
+  /** ПКМ по кошке — своё меню (menu.rs): фокус у человека не забирает, выбор приходит событием menu-pick. */
+  function showMenu() {
+    const s = parse(store.get('settings'));
+    const items = [
+      { id: 'feeder', text: 'Кормушка', checked: s.feeder, hint: s.feeder ? 'клик по миске — про запас' : 'клик по миске — покормить сейчас' },
+      { id: 'hideFromCapture', text: 'Прятать от записи экрана', checked: s.hideFromCapture },
+      { id: 'laser', text: 'Лазерная указка', checked: dot !== null, hint: 'или зажать Ctrl; Esc — выключить' },
+      { separator: true },
+      { id: 'settings', text: 'Настройки…' },
+    ];
+    invoke('open_menu', { owner: 'pet', items }).catch(console.error);
+  }
+
+  function menuPick(id: string) {
+    if (id === 'feeder' || id === 'hideFromCapture') toggle(id);
+    else if (id === 'laser') invoke('set_laser', { on: dot === null }).catch(console.error);
+    else if (id === 'settings') invoke('open_settings').catch(console.error);
   }
 
   async function sense() {
@@ -465,18 +544,46 @@
       persist(Date.now());
       render();
     });
+    // окно настроек уже сохранило файл; кеш обновляем, чтобы следующая галочка в меню не затёрла его старьём
+    // Слушаем своим окном: глобальный listen поймал бы и наш же emitTo('settings', 'settings').
+    const win = getCurrentWebviewWindow();
+    const unsettings = win.listen<Settings>('settings', (e) => {
+      if (frozen) return;
+      const s = parse(serialize(e.payload));
+      store.set('settings', serialize(s));
+      applySettings(s);
+    });
+    // Перед переносом папки: дописать всё и замолчать. Удачный перенос перезапустит программу,
+    // неудачный пришлёт thaw.
+    const unfreeze = win.listen('freeze', async () => {
+      persist(Date.now());
+      frozen = true;
+      await store.flush();
+      emitTo('settings', 'frozen').catch(console.error);
+    });
+    const unthaw = win.listen('thaw', () => {
+      frozen = false;
+    });
+    const unpick = win.listen<{ id: string }>('menu-pick', (e) => menuPick(e.payload.id));
+    // лазер: Rust шлёт курсор, пока указка включена, — охоту ведёт move()
+    const unlaser = win.listen<roam.Dot>('laser', (e) => {
+      dot = e.payload;
+    });
+    const unlaserOff = win.listen('laser-off', () => {
+      dot = null;
+    });
     return () => {
       alive = false;
       persist(Date.now());
       clearTimeout(timer);
       clearInterval(moving);
       clearInterval(id);
-      for (const off of [unlisten, unshake, unclick, unhello, uncall]) off.then((f) => f());
+      for (const off of [unlisten, unshake, unclick, unhello, uncall, unsettings, unfreeze, unthaw, unpick, unlaser, unlaserOff]) off.then((f) => f());
     };
   });
 </script>
 
-<!-- Встроенное меню WebView2 («Назад», «Обновить», «Проверить») питомцу ни к чему; своё меню — позже. -->
+<!-- Встроенное меню WebView2 («Назад», «Обновить», «Проверить») питомцу ни к чему; своё — в showMenu. -->
 <svelte:window oncontextmenu={(e) => e.preventDefault()} />
 
 <canvas bind:this={canvas} width={SIZE} height={SIZE} onpointerdown={poke}></canvas>

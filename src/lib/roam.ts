@@ -110,6 +110,8 @@ export interface Pet {
   jump: Jump | null;
   /** Скорость падения, физ. px/с. */
   vy: number;
+  /** Охота за лазерной точкой: есть, пока приложение зовёт `chase`; `step` её снимает. Не хранится. */
+  hunt?: Hunt;
 }
 /**
  * arrived — дошла до цели; landed — приземлилась после прыжка или падения; fell — невольно сорвалась
@@ -122,6 +124,8 @@ export type RoamEvent = 'arrived' | 'landed' | 'fell' | 'gone' | 'back';
 export const side = (m: Monitor): number => SIDE * m.scale;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
+/** Разница времени кадра в [0, MAX_DT_MS]; NaN — ноль. */
+const frameMs = (dt: number): number => Math.min(Math.max(dt, 0), MAX_DT_MS) || 0;
 /** Зажать в [lo, hi]; если отрезок вывернут (места нет) — его середина. */
 const fit = (v: number, lo: number, hi: number): number => (lo <= hi ? clamp(v, lo, hi) : (lo + hi) / 2);
 const inRect = (r: Rect, x: number, y: number): boolean =>
@@ -431,10 +435,18 @@ function peeking(world: World, f: Surface, x: number, half: number): boolean {
   return (x + half > f.right && outer(world, f, 1)) || (x - half < f.left && outer(world, f, -1));
 }
 
-function walkStep(pet: Pet, world: World, all: Surface[], c: Surface, dt: number): [Pet, RoamEvent | null] {
+/** Шаг по поверхности c к цели или за край; pace — скорость, логич. px/с (охота бежит быстрее). */
+function walkStep(
+  pet: Pet,
+  world: World,
+  all: Surface[],
+  c: Surface,
+  dt: number,
+  pace = WALK,
+): [Pet, RoamEvent | null] {
   const m = world.monitors[c.monitor];
   const half = side(m) / 2;
-  const v = (WALK * m.scale * dt) / 1000;
+  const v = (pace * m.scale * dt) / 1000;
 
   let next: Pet;
   let event: RoamEvent | null = null;
@@ -529,8 +541,10 @@ function fallStep(pet: Pet, world: World, all: Surface[], dt: number): [Pet, Roa
 
 /** Один кадр. Чистая функция: возвращает новый объект и событие, вход не трогает. */
 export function step(pet: Pet, world: World, dt: number): [Pet, RoamEvent | null] {
-  const ms = Math.min(Math.max(dt, 0), MAX_DT_MS) || 0;
+  const ms = frameMs(dt);
   const all = surfaces(world);
+  // Охоту бросили, не позвав endChase: снять её здесь, чтобы не осталась цель погони.
+  if (pet.hunt) pet = endChase(pet);
 
   if (pet.move === 'out') {
     // За краем: ничего не делает, только держится уровня пола своего монитора.
@@ -694,4 +708,247 @@ export function bowlAt(world: World): Goal | null {
 export function atBowl(pet: Pet, world: World): boolean {
   const b = bowlAt(world);
   return b !== null && pet.move === 'still' && pet.on === b.surface && Math.abs(pet.x - b.x) < 1;
+}
+
+// ── Охота за лазерной точкой ──────────────────────────────────────────────────────────────
+// Точка — курсор человека в физ. px рабочего стола. Пока лазер включён, приложение зовёт `chase`
+// вместо `step` на каждом кадре; выключило — `endChase` (или просто снова `step`: он снимет охоту сам).
+// Кошка бежит по поверхностям к точке под лазером, запрыгивает и спрыгивает теми же прыжками и
+// падениями, что и в прогулке; замершая рядом точка — припадает и прыгает на неё; точка за
+// непроходимым концом поверхности — с разбегу врезается в него.
+//
+// «Стена» в модели мира: у карниза — рамка другого окна из world.ledges, которая начинается ровно
+// там, где кончается открытый кусок кромки (±WALL_TOL), поднимается над лапами выше чем на side/2
+// и уходит ниже лап, то есть окно спереди, выше кошки, загородило ей путь. У любой поверхности —
+// внешний край экрана: кусок доходит до края work, а соседнего монитора с той стороны нет. Ещё
+// кошка тормозит, как о стену, на конце карниза, если точка висит на её уровне в пустоте, а под
+// точкой опора ниже лап больше чем на side: в такую пропасть за точкой не прыгает.
+// Пол стен не знает: окна стоят над ним, и он идёт под ними.
+
+/** Скорость бега на охоте, логич. px/с. */
+export const RUN = 3 * WALK;
+/** Мёртвая зона, логич. px: ближе к цели не бежит и не разворачивается — дрожащая точка её не дёргает. */
+export const DEAD = SIDE / 4;
+/** Точка сдвинулась меньше чем на столько логич. px — считается, что стоит. */
+export const STILL_R = 12;
+/** Точка ближе стольких сторон спрайта по горизонтали — «рядом»: можно припасть. */
+export const CLOSE = 1.5;
+/** Столько мс точка стоит рядом — кошка припадает ('crouch')... */
+export const CROUCH_MS = 500;
+/** ...и через столько мс в припаде прыгает на неё ('pounce'). */
+export const POUNCE_MS = 600;
+/** Уровень кошки: точка не выше стольких сторон над лапами... */
+const LEVEL_UP = 1.5;
+/** ...и не ниже стольких сторон под ними. */
+const LEVEL_DOWN = 0.5;
+/** На охоте прыжки короче: длительность × столько. */
+export const CHASE_JUMP = 0.6;
+/** Удар о стену: отскок длится столько мс... */
+export const BONK_MS = 300;
+/** ...и отбрасывает на столько логич. px назад. */
+export const RECOIL = SIDE / 8;
+/** Врезается, только если перед этим пробежала без остановки столько логич. px. */
+export const BONK_RUN = SIDE / 4;
+/** Между ударами не меньше стольких мс; в это время у стены просто останавливается. */
+export const BONK_COOL = 1500;
+/** Допуск совпадения конца кромки и края рамки-стены, физ. px. */
+const WALL_TOL = 2;
+
+/** run — бежит или стоит, следя за точкой; crouch — припала; pounce — в прыжке на точку; bonk — отскок от стены. */
+export type HuntMode = 'run' | 'crouch' | 'pounce' | 'bonk';
+export interface Hunt {
+  mode: HuntMode;
+  /** Мс в текущем режиме. */
+  t: number;
+  /** Где точка замерла и сколько мс стоит там (в пределах STILL_R). */
+  ax: number;
+  ay: number;
+  still: number;
+  /** Мс до права на следующий удар. */
+  cool: number;
+  /** Пробежала без остановки, физ. px. */
+  ran: number;
+}
+/** crouch — припала к замершей рядом точке; pounce — прыгнула на неё; bonk — с разбегу врезалась в стену. */
+export type ChaseEvent = 'crouch' | 'pounce' | 'bonk';
+export interface Dot {
+  x: number;
+  y: number;
+}
+
+/** Бежит за точкой: для анимации бега вместо шага. */
+export const isRunning = (pet: Pet): boolean => pet.hunt !== undefined && pet.move === 'walk';
+
+/**
+ * Бросить охоту: убрать её состояние и цель погони; идущая останавливается. Прыжок и падение
+ * не обрываются — их доведёт `step`, после приземления кошка стоит.
+ */
+export function endChase(pet: Pet): Pet {
+  if (pet.hunt === undefined) return pet;
+  const p: Pet = { ...pet, goal: null, move: pet.move === 'walk' ? 'still' : pet.move };
+  delete p.hunt;
+  return p;
+}
+
+/** Где на поверхности помещается кошка целиком: x лап от left + side/2 до right − side/2. */
+function reach(world: World, s: Surface): [number, number] {
+  const half = side(world.monitors[s.monitor]) / 2;
+  return [s.left + half, s.right - half];
+}
+const within = (x: number, [lo, hi]: [number, number]): number => fit(x, lo, hi);
+
+/** Опора под точкой: первая поверхность ниже неё на мониторе di (полосы заголовков не в счёт), иначе пол. */
+function under(all: Surface[], dot: Dot, di: number): Surface {
+  let best: Surface | null = null;
+  for (const s of all)
+    if (!s.strip && s.monitor === di && covers(s, dot.x) && s.y >= dot.y && (!best || s.y < best.y)) best = s;
+  return best ?? floorOf(all, di);
+}
+
+/** Конец поверхности c в сторону dir непроходим: внешний край экрана или стена (см. выше). */
+function hardEnd(world: World, c: Surface, dir: 1 | -1): boolean {
+  const m = world.monitors[c.monitor];
+  const end = dir > 0 ? c.right : c.left;
+  if ((dir > 0 ? end >= m.work.right : end <= m.work.left) && neighbor(world, c.monitor, dir) < 0) return true;
+  if (c.kind === 'floor') return false;
+  const head = c.y - side(m) / 2;
+  return world.ledges.some(
+    (l) =>
+      l.hwnd !== c.hwnd &&
+      Math.abs((dir > 0 ? l.frame.left : l.frame.right) - end) <= WALL_TOL &&
+      l.frame.top < head &&
+      l.frame.bottom > c.y,
+  );
+}
+
+/** Куда бежать: поверхность, x лап и сторона стены, о которую там врежется (0 — стены нет). */
+interface Aim {
+  surface: Surface;
+  x: number;
+  wall: 1 | -1 | 0;
+}
+
+/** Точка на уровне кошки, стоящей на c. */
+function level(world: World, c: Surface, dot: Dot): boolean {
+  const s = side(world.monitors[c.monitor]);
+  return dot.y >= c.y - LEVEL_UP * s && dot.y <= c.y + LEVEL_DOWN * s;
+}
+
+/**
+ * Цель погони с поверхности c. Под точкой опора выше кошки или точка не на её уровне — туда, под
+ * точку. На уровне и над c — по c к точке. На уровне за концом c: конец непроходим или внизу
+ * пропасть — к концу, со стеной; проходим — на опору под точкой.
+ */
+function aimAt(world: World, all: Surface[], c: Surface, dot: Dot, di: number): Aim {
+  const u = under(all, dot, di);
+  const go = (s: Surface): Aim => ({ surface: s, x: within(dot.x, reach(world, s)), wall: 0 });
+  if (u.y < c.y - SEAM || !level(world, c, dot)) return go(u);
+  const [lo, hi] = reach(world, c);
+  if (dot.x >= lo && dot.x <= hi) return go(c);
+  const dir: 1 | -1 = dot.x > hi ? 1 : -1;
+  const edge = within(dir > 0 ? hi : lo, [lo, hi]);
+  if (hardEnd(world, c, dir)) return { surface: c, x: edge, wall: dir };
+  if (covers(c, dot.x)) return { surface: c, x: edge, wall: 0 };
+  if (c.kind === 'ledge' && u.y > c.y + side(world.monitors[c.monitor])) return { surface: c, x: edge, wall: dir };
+  return go(u);
+}
+
+/** Только что начатый прыжок — короче, по CHASE_JUMP. */
+const quick = (p: Pet): Pet =>
+  p.move === 'jump' && p.jump && p.jump.t === 0 ? { ...p, jump: { ...p.jump, ms: p.jump.ms * CHASE_JUMP } } : p;
+
+/** Повернуться к x, если он дальше мёртвой зоны. */
+const look = (p: Pet, x: number, dz: number): 1 | -1 => (Math.abs(x - p.x) <= dz ? p.facing : x > p.x ? 1 : -1);
+
+/** Точку не видно: кошка доделывает начатое — летит, добегает до прежней цели. Охота не меняется. */
+function coast(pet: Pet, world: World, all: Surface[], ms: number): [Pet, RoamEvent | null] {
+  if (pet.move === 'jump') return jumpStep(pet, world, all, ms);
+  if (pet.move === 'fall') return fallStep(pet, world, all, ms);
+  if (pet.move !== 'walk' || !pet.goal || pet.hunt?.mode !== 'run') return [pet, null];
+  const [g, c, e] = ground(pet, world, all);
+  if (!c) return [g, e];
+  const [p, ev] = walkStep(g, world, all, c, ms, RUN);
+  return [quick(p), ev === 'arrived' ? null : ev];
+}
+
+/**
+ * Один кадр охоты: как `step`, но кошка гонится за точкой dot (физ. px рабочего стола).
+ * Чистая и детерминированная. Точка вне всех мониторов — не видна: кошка только доделывает
+ * начатое. Ушедшая за край ('out') — ничего. 'arrived' на охоте не приходит; 'landed', 'fell',
+ * 'back' — как в `step`. Уход за край (exit) охота отменяет.
+ */
+export function chase(pet: Pet, world: World, dot: Dot, dt: number): [Pet, ChaseEvent | RoamEvent | null] {
+  if (pet.move === 'out') return [pet, null];
+  const ms = frameMs(dt);
+  const all = surfaces(world);
+  const di = world.monitors.findIndex((m) => inRect(m.rect, dot.x, dot.y));
+  if (di < 0) return coast(pet, world, all, ms);
+
+  const prev: Hunt = pet.hunt ?? { mode: 'run', t: 0, ax: dot.x, ay: dot.y, still: 0, cool: 0, ran: 0 };
+  const moved = Math.hypot(dot.x - prev.ax, dot.y - prev.ay) > STILL_R * world.monitors[di].scale;
+  let h: Hunt = {
+    ...prev,
+    t: prev.t + ms,
+    ax: moved ? dot.x : prev.ax,
+    ay: moved ? dot.y : prev.ay,
+    still: moved ? 0 : prev.still + ms,
+    cool: Math.max(prev.cool - ms, 0),
+  };
+  /** После прыжка на точку — охота заново: ждать, пока точка опять замрёт. */
+  const afresh = (x: Hunt): Hunt => ({ ...x, mode: 'run', t: 0, ax: dot.x, ay: dot.y, still: 0, ran: 0 });
+
+  if (pet.move === 'jump' || pet.move === 'fall') {
+    const [p, e] = pet.move === 'jump' ? jumpStep(pet, world, all, ms) : fallStep(pet, world, all, ms);
+    const down = p.move !== 'jump' && p.move !== 'fall';
+    return [{ ...p, hunt: down && h.mode === 'pounce' ? afresh(h) : { ...h, ran: 0 } }, e];
+  }
+  if (h.mode === 'pounce') h = afresh(h);
+
+  const [g0, c, ge] = ground(pet, world, all);
+  if (!c) return [{ ...g0, hunt: { ...h, ran: 0 } }, ge];
+  const g: Pet = { ...g0, exit: 0 };
+  const m = world.monitors[c.monitor];
+  const s = side(m);
+  const dz = DEAD * m.scale;
+  /** Стоит на месте: охота продолжается, разбег сброшен. */
+  const stand = (p: Pet, x: Hunt, e: ChaseEvent | null = null): [Pet, ChaseEvent | null] => [
+    { ...p, move: 'still', goal: null, hunt: { ...x, ran: 0 } },
+    e,
+  ];
+
+  if (h.mode === 'bonk') {
+    if (h.t <= BONK_MS) {
+      // Отскок: назад от стены, мордой к ней.
+      const v = (RECOIL * m.scale * ms) / BONK_MS;
+      return stand(standOn(g, world, c, within(g.x - g.facing * v, reach(world, c))), h);
+    }
+    h = { ...h, mode: 'run', t: 0 };
+  }
+
+  const aim = aimAt(world, all, c, dot, di);
+  const close =
+    aim.wall === 0 && aim.surface.id === c.id && level(world, c, dot) && Math.abs(dot.x - g.x) <= CLOSE * s;
+
+  if (h.mode === 'crouch') {
+    if (!close) h = { ...h, mode: 'run', t: 0 };
+    else if (h.t >= POUNCE_MS) {
+      const j = quick(leap({ ...g, goal: null }, world, c, aim.x));
+      return [{ ...j, hunt: { ...h, mode: 'pounce', t: 0, ran: 0 } }, 'pounce'];
+    } else return stand({ ...g, facing: look(g, dot.x, dz) }, h);
+  }
+  if (close && h.still >= CROUCH_MS)
+    return stand({ ...g, facing: look(g, dot.x, dz) }, { ...h, mode: 'crouch', t: 0 }, 'crouch');
+
+  // Мёртвая зона: рядом с целью стоящая не трогается, бегущая не разворачивается назад.
+  const d = aim.x - g.x;
+  if (aim.surface.id === c.id && Math.abs(d) <= dz && (g.move === 'still' || Math.sign(d) !== g.facing))
+    return stand(g, h);
+
+  const run: Pet = { ...g, goal: { surface: aim.surface.id, x: aim.x }, move: 'walk' };
+  const [p0, e0] = walkStep(run, world, all, c, ms, RUN);
+  const p = quick(p0);
+  const ran = p.on !== null && p.x !== g.x ? h.ran + Math.abs(p.x - g.x) : 0;
+  if (aim.wall !== 0 && p.goal === null && p.on === c.id && ran >= BONK_RUN * m.scale && h.cool === 0)
+    return stand({ ...p, facing: aim.wall }, { ...h, mode: 'bonk', t: 0, cool: BONK_COOL }, 'bonk');
+  return [{ ...p, hunt: { ...h, ran } }, e0 === 'arrived' ? null : e0];
 }
