@@ -1,19 +1,39 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { draw, hitMask, IDLE, PETTED, SIZE, type Frame } from './lib/sprite';
+  import { ANIMS, draw, fatOn, hitMask, SIZE, type AnimName } from './lib/sprite';
 
-  const FRAME_MS = 600;
   const PETTED_MS = 1500;
+  /** Как часто спрашивать у Rust, что делает человек. Питомцу спешить некуда. */
+  const SENSES_MS = 2000;
+
+  /** Ответ команды `senses`; здесь только то, что уже нужно. */
+  interface Senses {
+    idle: boolean;
+  }
 
   let canvas: HTMLCanvasElement;
+  let anim: AnimName = 'sit';
   let tick = 0;
   let pettedUntil = 0;
+  let humanIdle = false;
   let lastMask = '';
+  let timer: ReturnType<typeof setTimeout>;
+
+  function choose(): AnimName {
+    if (Date.now() < pettedUntil) return 'petted';
+    return humanIdle ? 'sleep' : 'sit';
+  }
 
   function render() {
-    const frames = Date.now() < pettedUntil ? PETTED : IDLE;
-    const frame: Frame = frames[tick % frames.length];
+    const next = choose();
+    if (next !== anim) {
+      anim = next;
+      tick = 0;
+    }
+    // жирок по сегодняшней дате: если комп не выключали с октября, кошка всё равно потолстеет
+    const { frames } = ANIMS[fatOn(new Date())][anim];
+    const frame = frames[tick % frames.length];
     draw(canvas.getContext('2d')!, frame);
     // Rust пропускает клики сквозь всё, что не нарисовано, — сообщаем ему форму кадра, если она сменилась
     const mask = hitMask(frame);
@@ -24,18 +44,35 @@
     }
   }
 
+  /** У каждой анимации свой темп, поэтому таймер заводится заново на каждый кадр. */
+  function loop() {
+    tick++;
+    render();
+    timer = setTimeout(loop, ANIMS[0][anim].ms);
+  }
+
   function pet() {
     pettedUntil = Date.now() + PETTED_MS;
     render();
   }
 
+  async function sense() {
+    try {
+      humanIdle = (await invoke<Senses>('senses')).idle;
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
   onMount(() => {
     render();
-    const id = setInterval(() => {
-      tick++;
-      render();
-    }, FRAME_MS);
-    return () => clearInterval(id);
+    timer = setTimeout(loop, ANIMS[0][anim].ms);
+    sense();
+    const id = setInterval(sense, SENSES_MS);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(id);
+    };
   });
 </script>
 
