@@ -3,6 +3,7 @@ mod shake;
 mod tracker;
 #[cfg(windows)]
 mod win;
+mod world;
 
 use hit::{HitMask, SPRITE};
 use std::sync::{Arc, Mutex};
@@ -138,7 +139,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
         .manage(mask.clone())
         .manage(feel.clone())
-        .invoke_handler(tauri::generate_handler![set_hit_mask, senses])
+        .invoke_handler(tauri::generate_handler![set_hit_mask, senses, world::world, world::place_pet])
         .setup(move |app| {
             #[cfg(windows)]
             start_senses(feel);
