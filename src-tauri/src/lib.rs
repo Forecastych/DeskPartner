@@ -9,7 +9,7 @@ use std::time::Instant;
 use tracker::{Day, Now, Pace, Tracker};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 /// Во сколько раз увеличиваем пиксель арта при масштабе Windows 100%.
 /// 32 × 4 = 128: при любом шаге масштаба в 25% клетка остаётся целым числом экранных пикселей.
@@ -101,15 +101,21 @@ fn build_pet_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    // некормленый кот уходит навсегда — без этого пункта вернуть питомца было бы нечем
+    let adopt = MenuItem::with_id(app, "adopt", "Новый котик", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&quit])?;
+    let menu = Menu::with_items(app, &[&adopt, &quit])?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("DeskPartner")
         .menu(&menu)
-        .on_menu_event(|app, e| {
-            if e.id() == "quit" {
-                app.exit(0);
+        .on_menu_event(|app, e| match e.id().as_ref() {
+            "adopt" => {
+                if let Err(err) = app.emit_to("pet", "adopt", ()) {
+                    eprintln!("adopt: {err}");
+                }
             }
+            "quit" => app.exit(0),
+            _ => {}
         });
     if let Some(icon) = app.default_window_icon() {
         tray = tray.icon(icon.clone());

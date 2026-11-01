@@ -19,7 +19,14 @@ export const PALETTE: Record<string, string> = {
   w: '#ffffff', // блик в глазу
   h: '#e2556b', // сердечко
   z: '#bcd4ff', // «з-з-з» во сне
+  B: '#26324a', // контур миски — свой, чтобы клик по миске отличался от клика по кошке
+  b: '#5b8fd9', // миска
+  c: '#c98d4b', // корм
+  C: '#8a5a2b', // корм потемнее
 };
+
+/** Миска и корм в ней: клик сюда кормит, а не гладит. */
+const BOWL_KEYS = new Set(['B', 'b', 'c', 'C']);
 
 /** Украшения не часть зверя: клик по сердечку или «з-з-з» проходит насквозь. */
 const DECOR = new Set(['h', 'z']);
@@ -41,7 +48,10 @@ const EYES_OPEN: Part = ['kfwkffffwkfk', 'kfkkffffkkfk'];
 const EYES_SHUT: Part = ['kffffffffffk', 'kfkkffffkkfk'];
 const EYES_HAPPY: Part = ['kffkffffkffk', 'kfkfkffkfkfk'];
 
-const head = (eyes: Part): Part => [...HEAD_TOP, ...eyes, ...HEAD_BOTTOM];
+// Мяу: рот открыт, видно язык.
+const HEAD_MEOW: Part = ['klfffppffflk', '.kllkppkllk.', '..kkkkkkkk..'];
+
+const head = (eyes: Part, bottom = HEAD_BOTTOM): Part => [...HEAD_TOP, ...eyes, ...bottom];
 
 // Туловище сбоку, 18×8, полоски на спине.
 const BODY: Part = [
@@ -152,6 +162,14 @@ const SIT_TAIL_FLICK: Part = ['.......k', '......kd', 'kk...kfk', 'kfkkkffk', '.
 const SLEEP_TAIL: Part = ['.kfk', '.kfk', '.kfk', '.kdk', '.kdk', '..k.'];
 const SLEEP_TAIL_SWAY: Part = ['.kfk', '.kfk', 'kfk.', 'kdk.', 'kdk.', '.k..'];
 
+// Лёжа хвост обёрнут вдоль бока по полу, кончиком вперёд; кончик иногда приподнимается.
+const FLOOR_TAIL: Part = ['............', '.kkkkkkkkkk.', 'kffffffdddk.', '.kkkkkkkkkk.'];
+const FLOOR_TAIL_FLICK: Part = ['.........kk.', '.kkkkkkkkddk', 'kffffffddkk.', '.kkkkkkkkk..'];
+
+// Миска 10×5 и горка корма над ней.
+const BOWL: Part = ['BBBBBBBBBB', 'BbbbbbbbbB', 'BbbbbbbbbB', '.BbbbbbbB.', '..BBBBBB..'];
+const KIBBLE: Part = ['..cCccCc..', '.cccCcccC.'];
+
 const HEART: Part = ['.hh.hh.', 'hhhhhhh', 'hhhhhhh', '.hhhhh.', '..hhh..', '...h...'];
 const Z_SMALL: Part = ['zzzz', '..z.', '.z..', 'zzzz'];
 const Z_BIG: Part = ['zzzzz', '...z.', '..z..', '.z...', 'zzzzz'];
@@ -229,22 +247,22 @@ function sleeping(body: Part, tail: Part, z: [Part, number, number]): Frame {
   return compose([tail, 3, 26], [body, 5, y], [head(EYES_SHUT), 17, 17], z);
 }
 
-/** Буханка сбоку: лежит на земле, лапы и хвост спрятаны под себя, голова поднята. */
-function sideLoaf(body: Part, eyes: Part): Frame {
+/** Буханка сбоку: лежит на земле, лапы спрятаны под себя, хвост вдоль бока, голова поднята. */
+function sideLoaf(body: Part, eyes: Part, tail: Part): Frame {
   const y = SIZE - body.length;
-  return compose([body, 5, y], [head(eyes), 17, y - 5]);
+  return compose([body, 5, y], [tail, 3, SIZE - 4], [head(eyes), 17, y - 5]);
 }
 
-/** Верх спины лицом в пол сбоку, по столбцам: круп кверху, спина скатывается к голове. */
-const PLANT_TOP = [5, 3, 2, 1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 9, 10];
+/** Верх спины лицом в пол сбоку, по столбцам: спина ровная и низкая, у головы скатывается к полу. */
+const PLANT_TOP = [3, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 4, 5, 6, 7, 8];
 
 /**
  * Туловище лицом в пол сбоку: контур — всё, что граничит с пустотой, сзади поджатая светлая лапка.
- * На вдохе приподнимается круп, а не вся спина. Жирок добавляет рядов снизу — кошка выше.
+ * На вдохе приподнимается середина спины. Жирок добавляет рядов снизу — кошка выше.
  */
 function plantBody(fat: Fat, breath: boolean): Part {
-  const top = PLANT_TOP.map((t, x) => (breath && x >= 3 && x <= 8 ? t - 1 : t));
-  const h = 12 + fat;
+  const top = PLANT_TOP.map((t, x) => (breath && x >= 5 && x <= 10 ? t - 1 : t));
+  const h = 9 + fat;
   // нижний задний угол срезан — круп круглый, а не кирпичом
   const inside = (x: number, y: number) => x >= 0 && x < top.length && y >= top[x] && y < h && !(x === 0 && y === h - 1);
   return Array.from({ length: h }, (_, y) =>
@@ -260,22 +278,19 @@ function plantBody(fat: Fat, breath: boolean): Part {
   );
 }
 
-/** Спит, уткнувшись головой в пол, сбоку: из пола торчат только уши и лоб, хвост над крупом. */
+/** Спит, уткнувшись головой в пол, сбоку: из пола торчат только уши и лоб, хвост вдоль бока. */
 function sidePlant(fat: Fat, breath: boolean, tail: Part, z: [Part, number, number]): Frame {
   const body = plantBody(fat, breath);
   const y = SIZE - body.length;
-  return compose([tail, 0, y - 6], [body, 2, y], [[...HEAD_TOP, 'kkkkkkkkkkkk'], 18, SIZE - 6], z);
+  return compose([body, 2, y], [tail, 0, SIZE - 4], [[...HEAD_TOP, 'kkkkkkkkkkkk'], 18, SIZE - 6], z);
 }
 
-/**
- * Спит, уткнувшись головой в пол, анфас: круглая спина закрывает почти всю голову,
- * снизу торчат только уши и лоб — остальное в полу. По бокам светлые задние лапки, хвост над спиной.
- */
-function faceplant(fat: Fat, tail: Part, z: [Part, number, number]): Frame {
+/** Круглая спина анфас, когда голова опущена: по бокам светлые задние лапки. */
+function dome(fat: Fat): Part {
   const half = [3, 5, 6, 7, 7, 8, 8, 8, 8, 8, 8, 8].map((h, y) => h + (y >= 2 ? fat : 0));
   const widest = Math.max(...half);
   const last = half.length - 1;
-  const back = half.map((h, y) => {
+  return half.map((h, y) => {
     let row = '.'.repeat(widest - h);
     for (let x = -h; x < h; x++) {
       const edge = x === -h || x === h - 1;
@@ -287,8 +302,38 @@ function faceplant(fat: Fat, tail: Part, z: [Part, number, number]): Frame {
     }
     return row + '.'.repeat(widest - h);
   });
+}
+
+/**
+ * Спит, уткнувшись головой в пол, анфас: круглая спина закрывает почти всю голову,
+ * снизу торчат только уши и лоб — остальное в полу. Хвост над спиной.
+ */
+function faceplant(fat: Fat, tail: Part, z: [Part, number, number]): Frame {
+  const back = dome(fat);
   const y0 = SIZE - back.length;
-  return compose([tail, 17, y0 - 6], [back, 16 - widest, y0], [[...HEAD_TOP, 'kkkkkkkkkkkk'], 10, SIZE - 6], z);
+  const half = back[0].length / 2;
+  return compose([tail, 17, y0 - 6], [back, 16 - half, y0], [[...HEAD_TOP, 'kkkkkkkkkkkk'], 10, SIZE - 6], z);
+}
+
+/** Просит есть: сидит рядом с пустой миской и смотрит на человека. */
+function hungry(fat: Fat, eyes: Part, mouth: Part, tail: Part): Frame {
+  const body = frontBody(fat, SIT_HALF, true);
+  const half = body[0].length / 2;
+  return compose([tail, 13 + half, 26], [body, 16 - half, 22], [head(eyes, mouth), 10, 12], [BOWL, 0, SIZE - 5]);
+}
+
+/** Ест: спина горбом, голова опущена в миску, над краем видны уши и лоб; `headY` — кивок жуя. */
+function eating(fat: Fat, headY: number, tail: Part): Frame {
+  const back = dome(fat);
+  const y0 = SIZE - back.length;
+  const half = back[0].length / 2;
+  return compose(
+    [tail, 17, y0 - 6],
+    [back, 16 - half, y0],
+    [head(EYES_SHUT), 10, headY],
+    [KIBBLE, 11, SIZE - 7],
+    [BOWL, 11, SIZE - 5],
+  );
 }
 
 export interface Anim {
@@ -341,11 +386,11 @@ function build(fat: Fat) {
     sideLoaf: {
       ms: 1000,
       frames: [
-        sideLoaf(body, EYES_OPEN),
-        sideLoaf(body, EYES_OPEN),
-        sideLoaf(body, EYES_OPEN),
-        sideLoaf(body, EYES_OPEN),
-        sideLoaf(body, EYES_SHUT),
+        sideLoaf(body, EYES_OPEN, FLOOR_TAIL),
+        sideLoaf(body, EYES_OPEN, FLOOR_TAIL_FLICK),
+        sideLoaf(body, EYES_OPEN, FLOOR_TAIL),
+        sideLoaf(body, EYES_OPEN, FLOOR_TAIL),
+        sideLoaf(body, EYES_SHUT, FLOOR_TAIL),
       ],
     },
     sleep: {
@@ -365,9 +410,23 @@ function build(fat: Fat) {
     sidePlant: {
       ms: 1500,
       frames: [
-        sidePlant(fat, false, TAIL_UP, [Z_SMALL, 27, 16]),
-        sidePlant(fat, true, TAIL_SWAY, [Z_BIG, 27, 11]),
+        sidePlant(fat, false, FLOOR_TAIL, [Z_SMALL, 27, 16]),
+        sidePlant(fat, true, FLOOR_TAIL_FLICK, [Z_BIG, 27, 11]),
       ],
+    },
+    hungry: {
+      ms: 600,
+      frames: [
+        hungry(fat, EYES_OPEN, HEAD_BOTTOM, SIT_TAIL),
+        hungry(fat, EYES_OPEN, HEAD_BOTTOM, SIT_TAIL_FLICK),
+        hungry(fat, EYES_OPEN, HEAD_MEOW, SIT_TAIL),
+        hungry(fat, EYES_OPEN, HEAD_BOTTOM, SIT_TAIL),
+        hungry(fat, EYES_SHUT, HEAD_BOTTOM, SIT_TAIL),
+      ],
+    },
+    eat: {
+      ms: 300,
+      frames: [eating(fat, 20, TAIL_UP), eating(fat, 21, TAIL_UP), eating(fat, 20, TAIL_SWAY), eating(fat, 21, TAIL_SWAY)],
     },
     groom: {
       ms: 350,
@@ -411,6 +470,11 @@ export function draw(ctx: CanvasRenderingContext2D, frame: Frame): void {
       }
     }
   });
+}
+
+/** Попал ли клик в клетке (x, y) по миске. */
+export function onBowl(frame: Frame, x: number, y: number): boolean {
+  return BOWL_KEYS.has(frame[y]?.[x] ?? '.');
 }
 
 /** Маска для Rust: по числу на строку, бит x = в этой клетке нарисован зверь (не украшение). */

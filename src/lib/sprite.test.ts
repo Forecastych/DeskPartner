@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ANIMS, fatOn, FATS, flip, hitMask, PALETTE, SIZE } from './sprite';
+import { ANIMS, fatOn, FATS, flip, hitMask, onBowl, PALETTE, SIZE } from './sprite';
 
 const all = FATS.flatMap((fat) =>
   Object.entries(ANIMS[fat]).flatMap(([name, a]) => a.frames.map((f, i) => [`${name}[${i}] жир ${fat}`, f] as const)),
@@ -27,7 +27,7 @@ describe('кадры', () => {
 
   it('всё, кроме сна на рамке, стоит на земле — нижний ряд закрашен', () => {
     for (const fat of FATS)
-      for (const name of ['stand', 'walk', 'sit', 'loaf', 'sideLoaf', 'faceplant', 'sidePlant', 'groom'] as const)
+      for (const name of ['stand', 'walk', 'sit', 'loaf', 'sideLoaf', 'faceplant', 'sidePlant', 'groom', 'hungry', 'eat'] as const)
         for (const f of ANIMS[fat][name].frames) expect(hitMask(f)[SIZE - 1]).not.toBe(0);
   });
 
@@ -64,6 +64,33 @@ describe('hitMask', () => {
     const heartRows = petted.map((r, y) => (r.includes('h') ? y : -1)).filter((y) => y >= 0);
     expect(heartRows.length).toBeGreaterThan(0);
     for (const y of heartRows) expect(hitMask(petted)[y]).toBe(0);
+  });
+});
+
+describe('миска', () => {
+  const at = (f: string[], keys: string) => {
+    const y = f.findIndex((r) => [...r].some((c) => keys.includes(c)));
+    return [[...f[y]].findIndex((c) => keys.includes(c)), y] as const;
+  };
+
+  it('клик по миске попадает в миску, по кошке и мимо — нет', () => {
+    for (const f of FATS.flatMap((fat) => [...ANIMS[fat].hungry.frames, ...ANIMS[fat].eat.frames])) {
+      expect(onBowl(f, ...at(f, 'b'))).toBe(true);
+      expect(onBowl(f, ...at(f, 'p'))).toBe(false);
+      expect(onBowl(f, -1, 0)).toBe(false);
+      expect(onBowl(f, 0, SIZE)).toBe(false);
+    }
+  });
+
+  it('миска кликабельна — она в маске, а не украшение', () => {
+    const f = ANIMS[0].hungry.frames[0];
+    const [x, y] = at(f, 'b');
+    expect(hitMask(f)[y] & (1 << x)).not.toBe(0);
+  });
+
+  it('голодная просит у пустой миски, а ест из полной', () => {
+    expect(ANIMS[0].hungry.frames.some((f) => f.join('').includes('c'))).toBe(false);
+    for (const f of ANIMS[0].eat.frames) expect(f.join('')).toContain('c');
   });
 });
 
