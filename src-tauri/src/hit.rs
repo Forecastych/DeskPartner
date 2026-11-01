@@ -4,11 +4,13 @@
 //! Поэтому окно по умолчанию пропускает мышь насквозь, а отдельный поток часто смотрит,
 //! над каким пикселем спрайта курсор, и принимает мышь, только пока тот над зверем.
 //! С зажатым Alt клик проходит насквозь всегда.
+//! Тот же опрос кормит детектор тряски (shake.rs): потрясли курсором над зверем — событие "shake".
 
+use crate::shake::Shake;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
-use tauri::WebviewWindow;
+use std::time::{Duration, Instant};
+use tauri::{Emitter, WebviewWindow};
 
 /// Сторона спрайта в пикселях арта.
 pub const SPRITE: u32 = 32;
@@ -37,16 +39,14 @@ pub fn spawn(window: WebviewWindow, mask: Arc<HitMask>) {
     let _ = window.set_ignore_cursor_events(true);
     thread::spawn(move || {
         let mut ignoring = true;
+        let mut shake = Shake::default();
         loop {
             thread::sleep(POLL);
             // внутренняя область, а не внешняя: Windows добавляет невидимые поля даже окну без рамки.
             // Окно закрыли — следить больше не за чем.
             let (Ok(pos), Ok(size)) = (window.inner_position(), window.inner_size()) else { break };
             let Some((cx, cy)) = input::cursor() else { continue };
-            // пока кнопка зажата над зверем, не отпускаем мышь, даже если курсор съехал с силуэта
-            if !ignoring && input::left_button_down() {
-                continue;
-            }
+            let (alt, held) = (input::alt_down(), input::left_button_down());
             // Спрайт — квадрат по центру окна (см. app.css): окно бывает шире заказанного,
             // Windows не даёт ему быть уже SM_CXMINTRACK (136 px при масштабе 100%).
             let side = size.width.min(size.height) as f64;
@@ -55,7 +55,23 @@ pub fn spawn(window: WebviewWindow, mask: Arc<HitMask>) {
             let top = pos.y as f64 + (size.height as f64 - side) / 2.0;
             let x = ((cx as f64 - left) / cell).floor() as i64;
             let y = ((cy as f64 - top) / cell).floor() as i64;
-            let want = !mask.contains(x, y) || input::alt_down();
+            // трясут над всем квадратом, а не по силуэту: промах мимо уха не должен сбивать счёт.
+            // Alt — «пропусти меня», с зажатой кнопкой человек что-то тащит: это не тряска.
+            let over = (0..SPRITE as i64).contains(&x) && (0..SPRITE as i64).contains(&y);
+            if over && !alt && !held {
+                if shake.feed(cx, cy, Instant::now()) {
+                    if let Err(err) = window.emit_to("pet", "shake", ()) {
+                        eprintln!("shake: {err}");
+                    }
+                }
+            } else {
+                shake.reset();
+            }
+            // пока кнопка зажата над зверем, не отпускаем мышь, даже если курсор съехал с силуэта
+            if !ignoring && held {
+                continue;
+            }
+            let want = !mask.contains(x, y) || alt;
             if want != ignoring && window.set_ignore_cursor_events(want).is_ok() {
                 ignoring = want;
             }

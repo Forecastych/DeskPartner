@@ -3,6 +3,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
   import { feedBowl, fresh, isHungry, load, refill, save, step, takeOut, type Belly } from './lib/hunger';
+  import * as sleepy from './lib/sleep';
   import { ANIMS, draw, fatOn, hitMask, onBowl, SIZE, type AnimName, type Frame } from './lib/sprite';
 
   const PETTED_MS = 1500;
@@ -13,8 +14,8 @@
   const RESTS: [AnimName, number][] = [['sit', 2], ['loaf', 1], ['sideLoaf', 1]];
   /** Как засыпает: обычно калачиком, иногда уткнувшись головой в пол — анфас или боком. */
   const SLEEPS: [AnimName, number][] = [['sleep', 3], ['faceplant', 1], ['sidePlant', 1]];
-  /** Проспала дольше этого — по кошачьим меркам долго, проснувшись, умывается. */
-  const LONG_SLEEP_MS = 10 * 60_000;
+  /** Разбудили, не доспала — засыпает на ходу, где стояла: носом в пол. */
+  const DOZES: [AnimName, number][] = [['faceplant', 1], ['sidePlant', 1]];
   const GROOM_MS = 6000;
   /** Ест столько, потом умывается. */
   const EAT_MS = 8000;
@@ -66,6 +67,7 @@
   /** Галочка «Кормушка» — пока только ключ в хранилище; окно настроек будет писать сюда же. */
   const feederOn = read('feeder') === '1';
   let belly: Belly = load(read('belly'));
+  let nap: sleepy.Sleep = sleepy.load(read('sleep'));
   const stats = loadStats();
 
   let canvas: HTMLCanvasElement;
@@ -74,11 +76,11 @@
   let tick = 0;
   let pettedUntil = 0;
   let humanIdle = false;
+  let seenHuman = false;
   let rest: AnimName = 'sit';
   let restUntil = 0;
-  /** Поза сна выбирается при засыпании и держится, пока человек не вернётся. */
-  let sleep: AnimName | null = null;
-  let asleepSince = 0;
+  /** Поза сна выбирается при засыпании и держится до пробуждения. */
+  let sleepPose: AnimName | null = null;
   let groomUntil = 0;
   let eatUntil = 0;
   /** Уходит (за едой или насовсем) или возвращается: до этого момента идёт и растворяется. */
@@ -91,6 +93,7 @@
   function persist(now: number) {
     lastSave = now;
     write('belly', save(belly));
+    write('sleep', sleepy.save(nap));
     write('stats', JSON.stringify(stats));
   }
 
@@ -106,40 +109,73 @@
     groomUntil = eatUntil + GROOM_MS;
   }
 
+  const FADE = `opacity ${WALK_MS}ms linear`;
+
   function walk(now: number, show: boolean) {
     walkUntil = now + WALK_MS;
+    if (show) {
+      // появляется всегда из прозрачной, даже если только что над краем висели «з-з-з»
+      canvas.style.transition = 'none';
+      canvas.style.opacity = '0';
+      void canvas.offsetWidth;
+      canvas.style.transition = FADE;
+    }
     canvas.style.opacity = show ? '1' : '0';
   }
 
-  /** Голод живёт по времени работы программы; события голода превращаются в позы. */
+  /** Вернулась из-за края — выспавшейся или сытой, всё равно сначала умывается. */
+  function comeBack(now: number) {
+    walk(now, true);
+    groomUntil = walkUntil + GROOM_MS;
+  }
+
+  /**
+   * Побудка кликом или тряской курсора. Бодрую не касается — тогда false, и клик просто гладит.
+   * Выспавшаяся проснулась и умывается; не доспавшая вялая, злая, а на третий раз уходит за край.
+   */
+  function disturb(now: number): boolean {
+    const [next, result] = sleepy.poke(nap);
+    if (!result) return false;
+    nap = next;
+    sleepPose = null;
+    if (result === 'wake') groomUntil = now + GROOM_MS;
+    if (result === 'leave') walk(now, false);
+    persist(now);
+    return true;
+  }
+
+  /** Голод и сон живут по времени работы программы; их события превращаются в позы. */
   function live(now: number) {
-    const [next, event] = step(belly, now - lastStep, feederOn);
+    const dt = now - lastStep;
     lastStep = now;
+    const [next, event] = step(belly, dt, feederOn);
     belly = next;
     if (event === 'eat') meal(now);
     if (event === 'leave' || event === 'gone') walk(now, false);
-    if (event === 'return') {
-      walk(now, true);
-      // поела где-то там, вернулась — умывается
-      groomUntil = walkUntil + GROOM_MS;
-    }
-    if (event || now - lastSave >= SAVE_MS) persist(now);
+    // поела где-то там
+    if (event === 'return') comeBack(now);
+
+    const [rested, mood] = sleepy.step(nap, dt, humanIdle);
+    nap = rested;
+    if (mood === 'sleep') sleepPose = pick(SLEEPS);
+    if (mood === 'doze') sleepPose = pick(DOZES);
+    // полный сон — не меньше NAP_MS, по кошачьим меркам долго: проснувшись, умывается
+    if (mood === 'wake') groomUntil = now + GROOM_MS;
+    if (mood === 'return') comeBack(now);
+
+    if (event || mood || now - lastSave >= SAVE_MS) persist(now);
   }
 
   /** Поза на сейчас; null — кошки на экране нет. */
   function choose(now: number): AnimName | null {
     if (now < walkUntil) return 'walk';
     if (belly.gone || belly.away > 0) return null;
+    const mood = sleepy.mood(nap);
+    if (mood === 'away') return 'zzz';
     if (now < pettedUntil) return 'petted';
     if (now < eatUntil) return 'eat';
-    if (humanIdle) {
-      if (!sleep) asleepSince = now;
-      return (sleep ??= pick(SLEEPS));
-    }
-    if (sleep) {
-      if (now - asleepSince >= LONG_SLEEP_MS) groomUntil = now + GROOM_MS;
-      sleep = null;
-    }
+    if (mood === 'angry' || mood === 'groggy') return mood;
+    if (mood === 'asleep') return (sleepPose ??= pick(SLEEPS));
     // проснулась голодной — сначала к миске, умыться успеет потом
     if (isHungry(belly)) return 'hungry';
     if (now < groomUntil) return 'groom';
@@ -157,6 +193,8 @@
     if (next !== anim) {
       anim = next;
       tick = 0;
+      // ушла за край растворяясь, а «з-з-з» над краем видны — проявляются так же плавно
+      if (anim === 'zzz') canvas.style.opacity = '1';
     }
     // жирок по сегодняшней дате: если комп не выключали с октября, кошка всё равно потолстеет
     if (anim) {
@@ -205,7 +243,7 @@
         meal(now);
       }
       persist(now);
-    } else if (e.button === 0) {
+    } else if (e.button === 0 && !disturb(now)) {
       pettedUntil = now + PETTED_MS;
       stats.petted++;
     }
@@ -214,14 +252,18 @@
 
   async function sense() {
     try {
-      humanIdle = (await invoke<Senses>('senses')).idle;
+      // До первого движения мыши трекер считает человека отошедшим, а сон липкий: без этого
+      // кошка засыпала бы на NAP_MS прямо на старте. Скучать начинает, только увидев человека.
+      const { idle } = await invoke<Senses>('senses');
+      seenHuman ||= !idle;
+      humanIdle = seenHuman && idle;
     } catch (e) {
       console.error(e);
     }
   }
 
   onMount(() => {
-    canvas.style.transition = `opacity ${WALK_MS}ms linear`;
+    canvas.style.transition = FADE;
     if (belly.gone || belly.away > 0) canvas.style.opacity = '0';
     render();
     timer = setTimeout(loop, anim ? ANIMS[0][anim].ms : AWAY_TICK_MS);
@@ -231,14 +273,20 @@
     const unlisten = listen('adopt', () => {
       if (!belly.gone) return;
       belly = fresh();
+      nap = sleepy.fresh();
       walk(Date.now(), true);
       persist(Date.now());
       render();
+    });
+    // Rust заметил, что курсором трясут над кошкой: будит так же, как клик, но не гладит
+    const unshake = listen('shake', () => {
+      if (disturb(Date.now())) render();
     });
     return () => {
       clearTimeout(timer);
       clearInterval(id);
       unlisten.then((off) => off());
+      unshake.then((off) => off());
     };
   });
 </script>

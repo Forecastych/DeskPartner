@@ -1,4 +1,5 @@
 mod hit;
+mod shake;
 mod tracker;
 #[cfg(windows)]
 mod win;

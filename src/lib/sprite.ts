@@ -47,11 +47,26 @@ const HEAD_BOTTOM: Part = [
 const EYES_OPEN: Part = ['kfwkffffwkfk', 'kfkkffffkkfk'];
 const EYES_SHUT: Part = ['kffffffffffk', 'kfkkffffkkfk'];
 const EYES_HAPPY: Part = ['kffkffffkffk', 'kfkfkffkfkfk'];
+// Не доспала: веки тяжёлые, глаза полуприкрыты.
+const EYES_SLEEPY: Part = ['kfddffffddfk', 'kfkkffffkkfk'];
+// Злая: косые щёлки, внутренние концы ниже — «\ /».
+const EYES_ANGRY: Part = ['kfkffffffkfk', 'kffkkffkkffk'];
 
 // Мяу: рот открыт, видно язык.
 const HEAD_MEOW: Part = ['klfffppffflk', '.kllkppkllk.', '..kkkkkkkk..'];
+// Шипит: пасть шире, видны клыки.
+const HEAD_HISS: Part = ['klffkppkfflk', '.klkwppwklk.', '..kkkkkkkk..'];
 
-const head = (eyes: Part, bottom = HEAD_BOTTOM): Part => [...HEAD_TOP, ...eyes, ...bottom];
+// Уши прижаты к голове и смотрят в стороны.
+const HEAD_FLAT: Part = [
+  '............',
+  'kkk......kkk',
+  'kppkkkkkkppk',
+  'kfffdffdfffk',
+  'kffffffffffk',
+];
+
+const head = (eyes: Part, bottom = HEAD_BOTTOM, top = HEAD_TOP): Part => [...top, ...eyes, ...bottom];
 
 // Туловище сбоку, 18×8, полоски на спине.
 const BODY: Part = [
@@ -214,6 +229,52 @@ function sitting(fat: Fat, eyes: Part, tail: Part, extra: [Part, number, number]
   const half = body[0].length / 2;
   return compose([tail, 13 + half, 26], [body, 16 - half, 22], [head(eyes), 10, 12], ...extra);
 }
+
+/** Разбудили, не доспала: сидит, клюёт носом (`nod` — голова ниже на пиксель) и зевает. */
+function groggy(fat: Fat, eyes: Part, nod: boolean, mouth = HEAD_BOTTOM): Frame {
+  const body = frontBody(fat, SIT_HALF, true);
+  const half = body[0].length / 2;
+  return compose([SIT_TAIL, 13 + half, 26], [body, 16 - half, 22], [head(eyes, mouth), 10, nod ? 13 : 12]);
+}
+
+// Злая сбоку: спина дугой, по столбцам x 3–21 — верх (y) и нижний контур живота.
+const ARCH_TOP = [20, 18, 16, 15, 14, 13, 13, 12, 12, 12, 12, 13, 13, 14, 15, 16, 17, 18, 19];
+const ARCH_BOTTOM = [23, 24, 24, 24, 24, 24, 24, 24, 23, 22, 22, 23, 24, 24, 24, 24, 24, 24, 23];
+
+/**
+ * Туловище дугой: шерсть дыбом — через столбец торчит на пиксель выше, `bristle` меняет
+ * чётность, и шерсть дрожит. Жирок провисает живот под серединой дуги.
+ */
+function archBody(fat: Fat, bristle: boolean): Part {
+  const top = ARCH_TOP.map((t, x) => (x > 1 && x < ARCH_TOP.length - 2 && x % 2 === Number(bristle) ? t - 1 : t));
+  const bottom = ARCH_BOTTOM.map((b, x) => (x >= 7 && x <= 12 ? b + Math.min(fat, 24 - b) : b));
+  const inside = (x: number, y: number) => x >= 0 && x < top.length && y >= top[x] && y <= bottom[x];
+  // ряды сразу в координатах кадра: пустые сверху compose пропустит
+  return Array.from({ length: Math.max(...bottom) + 1 }, (_, y) => {
+    return top
+      .map((_, x) => {
+        if (!inside(x, y)) return '.';
+        if (!inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1)) return 'k';
+        if ((x === 6 || x === 9 || x === 12) && y <= top[x] + 2) return 'd';
+        return 'f';
+      })
+      .join('');
+  });
+}
+
+// Хвост ёршиком: распушён вдвое против обычного.
+const TAIL_PUFF: Part = ['.kkk..', 'kdddk.', 'kfffk.', 'kdfdk.', 'kfffk.', 'kfffk.', '.kfffk', '..kffk', '...kfk'];
+const TAIL_PUFF_SWAY: Part = ['..kkk.', '.kdddk', 'kfffk.', 'kdfdk.', 'kfffk.', 'kfffk.', '.kfffk', '..kffk', '...kfk'];
+
+/** Разбудили второй раз: выгнула спину, стоит на прямых лапах, голова опущена, шипит. */
+function angry(fat: Fat, bristle: boolean, mouth: Part, tail: Part): Frame {
+  const body = archBody(fat, bristle);
+  const legs = [4, 7, 15, 18].map((x): [Part, number, number] => [leg(8), x, 24]);
+  return compose([tail, 0, 11], [body, 3, 0], ...legs, [head(EYES_ANGRY, mouth, HEAD_FLAT), 17, 14]);
+}
+
+/** Обиделась и спит за краем экрана: самой не видно, только «з-з-з» всплывает снизу и тает. */
+const behindEdge = (z: Part, x: number, y: number): Frame => compose([z, x, y]);
 
 // Умывание: левая лапа поднята к морде — у рта, чтобы лизнуть, или у глаза, чтобы потереть.
 // Светлая подушечка сверху, ниже предплечье до груди (y 23), иначе лапа висит в воздухе.
@@ -444,6 +505,37 @@ function build(fat: Fat) {
       frames: [
         sitting(fat, EYES_HAPPY, SIT_TAIL, [[HEART, 13, 5]]),
         sitting(fat, EYES_HAPPY, SIT_TAIL_FLICK, [[HEART, 13, 4]]),
+      ],
+    },
+    groggy: {
+      ms: 700,
+      frames: [
+        groggy(fat, EYES_SLEEPY, false),
+        groggy(fat, EYES_SHUT, true),
+        groggy(fat, EYES_SHUT, true),
+        groggy(fat, EYES_SLEEPY, false),
+        groggy(fat, EYES_SHUT, false, HEAD_MEOW),
+        groggy(fat, EYES_SLEEPY, false),
+      ],
+    },
+    angry: {
+      ms: 250,
+      frames: [
+        angry(fat, false, HEAD_HISS, TAIL_PUFF),
+        angry(fat, true, HEAD_HISS, TAIL_PUFF_SWAY),
+        angry(fat, false, HEAD_HISS, TAIL_PUFF),
+        angry(fat, true, HEAD_BOTTOM, TAIL_PUFF_SWAY),
+      ],
+    },
+    zzz: {
+      ms: 900,
+      frames: [
+        behindEdge(Z_SMALL, 14, 27),
+        behindEdge(Z_SMALL, 15, 22),
+        behindEdge(Z_BIG, 16, 16),
+        behindEdge(Z_BIG, 17, 10),
+        compose(),
+        compose(),
       ],
     },
   } satisfies Record<string, Anim>;

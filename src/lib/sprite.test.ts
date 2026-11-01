@@ -27,7 +27,7 @@ describe('кадры', () => {
 
   it('всё, кроме сна на рамке, стоит на земле — нижний ряд закрашен', () => {
     for (const fat of FATS)
-      for (const name of ['stand', 'walk', 'sit', 'loaf', 'sideLoaf', 'faceplant', 'sidePlant', 'groom', 'hungry', 'eat'] as const)
+      for (const name of ['stand', 'walk', 'sit', 'loaf', 'sideLoaf', 'faceplant', 'sidePlant', 'groom', 'hungry', 'eat', 'groggy', 'angry'] as const)
         for (const f of ANIMS[fat][name].frames) expect(hitMask(f)[SIZE - 1]).not.toBe(0);
   });
 
@@ -37,6 +37,10 @@ describe('кадры', () => {
       expect(width(mask[27])).toBeGreaterThan(15);
       for (let y = 28; y < SIZE; y++) expect(width(mask[y])).toBeLessThanOrEqual(4);
     }
+  });
+
+  it('за краем экрана кошки нет — только «з-з-з», клики проходят насквозь', () => {
+    for (const f of FATS.flatMap((fat) => ANIMS[fat].zzz.frames)) expect(area(f)).toBe(0);
   });
 
   it('flip зеркалит и дважды возвращает исходный кадр', () => {
@@ -101,7 +105,8 @@ describe('сезонный жирок', () => {
   });
 
   it('с каждым уровнем зверь крупнее в каждой позе', () => {
-    for (const name of Object.keys(ANIMS[0]) as (keyof (typeof ANIMS)[0])[])
+    // за краем экрана толстеть некому
+    for (const name of (Object.keys(ANIMS[0]) as (keyof (typeof ANIMS)[0])[]).filter((n) => n !== 'zzz'))
       for (let i = 0; i < ANIMS[0][name].frames.length; i++) {
         const [thin, plump, fat] = FATS.map((lvl) => area(ANIMS[lvl][name].frames[i]));
         expect(plump).toBeGreaterThan(thin);
