@@ -3,6 +3,7 @@ import { MAX_STEP_MS } from './hunger';
 import {
   ANGRY_MS,
   AWAKE_MS,
+  call,
   fresh,
   GROGGY_MS,
   load,
@@ -218,6 +219,24 @@ describe('побудка', () => {
     const [groggy] = poke(sleeping());
     const [, events] = run(groggy, GROGGY_MS, true);
     expect(events).toEqual(['doze']);
+  });
+});
+
+describe('зов из трея', () => {
+  it('ушедшая в обиде приходит выспавшейся, лестница побудки сброшена', () => {
+    let s = sleeping();
+    for (let i = 0; i < 3; i++) [s] = poke(i ? { ...s, asleep: true } : s);
+    expect(mood(s)).toBe('away');
+    const back = call(s);
+    expect(mood(back)).toBe('awake');
+    expect(back).toMatchObject({ away: 0, wakes: 0, cranky: 0, asleep: false });
+    // первая же побудка после зова — снова вялая, а не сразу за край
+    expect(poke({ ...back, asleep: true })[1]).toBe('groggy');
+  });
+
+  it('дома зов сон не трогает', () => {
+    const s = sleeping(5 * MIN);
+    expect(call(s)).toBe(s);
   });
 });
 

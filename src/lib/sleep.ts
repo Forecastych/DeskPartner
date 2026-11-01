@@ -100,6 +100,15 @@ export function poke(s: Sleep): [Sleep, PokeResult | null] {
   return [{ ...n, cranky: 0, away: NAP_MS, slept: 0 }, 'leave'];
 }
 
+/**
+ * Позвали из трея: досыпающая за краем в обиде прощает и приходит, хоть и не доспала.
+ * Считается выспавшейся — иначе первая же побудка дома снова увела бы её за край.
+ * Дома зов на сон не влияет: тот же объект.
+ */
+export function call(s: Sleep): Sleep {
+  return s.away > 0 ? { ...rested(s), away: 0 } : s;
+}
+
 const okNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 
 /** Разбор из localStorage. Битое или подделанное начинает заново, а не ломает кошку посреди жизни. */

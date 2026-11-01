@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   arcY,
+  atBowl,
+  bowlAt,
+  BOWL_INSET,
   EDGE_GAP,
   enter,
   goTo,
@@ -621,5 +624,31 @@ describe('окно человека и полоса заголовка', () => {
     expect(after[0]).toBe('fell');
     expect(moves).toContain('fall');
     expect(q).toMatchObject({ on: 'floor:0', y: 1040 });
+  });
+});
+
+describe('миска', () => {
+  it('на полу основного монитора у правого угла, с отступом на наклон кошки', () => {
+    const w = world([monitor(-1920, 0, 1920, 1080), monitor(0, 0, 2560, 1440, 1.5)]);
+    w.monitors[0].primary = false;
+    w.monitors[1].primary = true;
+    const b = bowlAt(w)!;
+    expect(b.surface).toBe('floor:1');
+    expect(b.x).toBe(2560 - SIDE * 1.5 * (0.5 + BOWL_INSET) - EDGE_GAP);
+  });
+
+  it('без мониторов миски нет', () => {
+    expect(bowlAt(world([]))).toBeNull();
+  });
+
+  it('дошла до миски — стоит у миски; по дороге — ещё нет', () => {
+    const w = world([monitor(0, 0, 1920, 1080)]);
+    let pet = goTo(spawn(w), w, { surface: 'floor:0', x: 200 });
+    [pet] = run(pet, w, 60_000);
+    expect(atBowl(pet, w)).toBe(false);
+    pet = goTo(pet, w, bowlAt(w)!);
+    expect(atBowl(pet, w)).toBe(false);
+    [pet] = run(pet, w, 60_000);
+    expect(atBowl(pet, w)).toBe(true);
   });
 });

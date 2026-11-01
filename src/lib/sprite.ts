@@ -182,6 +182,8 @@ const FLOOR_TAIL: Part = ['............', '.kkkkkkkkkk.', 'kffffffdddk.', '.kkkk
 // Миска 10×5 и горка корма над ней.
 const BOWL: Part = ['BBBBBBBBBB', 'BbbbbbbbbB', 'BbbbbbbbbB', '.BbbbbbbB.', '..BBBBBB..'];
 const KIBBLE: Part = ['..cCccCc..', '.cccCcccC.'];
+// В кормушке горка растёт с числом порций: одна, две-три, четыре и больше.
+const PILES: Part[] = [KIBBLE, ['...cCcc...', ...KIBBLE], ['....cC....', '...cCcc...', ...KIBBLE]];
 
 const HEART: Part = ['.hh.hh.', 'hhhhhhh', 'hhhhhhh', '.hhhhh.', '..hhh..', '...h...'];
 const Z_SMALL: Part = ['zzzz', '..z.', '.z..', 'zzzz'];
@@ -610,6 +612,29 @@ export function draw(ctx: CanvasRenderingContext2D, frame: Frame): void {
       }
     }
   });
+}
+
+/**
+ * Левый столбец миски в окне миски. Миска у правого края кадра — там же, где она в позе
+ * `hungry`, отражённой влево: кошка у миски стоит слева от неё, и две миски совпадают пиксель в пиксель.
+ */
+export const BOWL_X = SIZE - BOWL[0].length;
+
+/** Кадр окна миски: пустая или с горкой корма по числу порций. */
+export function bowlFrame(portions: number): Frame {
+  const pile = portions <= 0 ? null : PILES[portions === 1 ? 0 : portions <= 3 ? 1 : 2];
+  const bowl: [Part, number, number] = [BOWL, BOWL_X, SIZE - BOWL.length];
+  return pile ? compose([pile, BOWL_X, SIZE - BOWL.length - pile.length], bowl) : compose(bowl);
+}
+
+/** Левый столбец миски в кадре кошки; null — миски в кадре нет. */
+export function bowlLeft(frame: Frame): number | null {
+  let left: number | null = null;
+  for (const row of frame) {
+    const x = row.indexOf('B');
+    if (x >= 0 && (left === null || x < left)) left = x;
+  }
+  return left;
 }
 
 /** Попал ли клик в клетке (x, y) по миске. */

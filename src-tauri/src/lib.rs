@@ -1,21 +1,30 @@
+//! Окна приложения. "pet" и "bowl" — прозрачные спрайты поверх всего, клики сквозь них
+//! проходят везде, кроме рисунка (hit.rs). "setup" — обычное окно первого запуска: пока
+//! человек не выбрал папку данных и не сохранил настройки (store.rs), питомца нет, есть только оно.
+
 mod hit;
 mod shake;
+mod store;
 mod tracker;
 #[cfg(windows)]
 mod win;
 mod world;
 
-use hit::{HitMask, SPRITE};
+use hit::{Masks, SPRITE};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tracker::{Day, Now, Pace, Tracker};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 /// Во сколько раз увеличиваем пиксель арта при масштабе Windows 100%.
 /// 32 × 4 = 128: при любом шаге масштаба в 25% клетка остаётся целым числом экранных пикселей.
 const ZOOM: f64 = 4.0;
+
+/// Окна-спрайты на рабочем столе. Порядок — это порядок по глубине: построенное позже
+/// ложится сверху, и кошка, что пришла есть, должна быть перед миской, а не под горкой корма.
+const SPRITES: [&str; 2] = ["bowl", "pet"];
 
 /// Что питомец знает о человеке прямо сейчас.
 struct Senses {
@@ -36,9 +45,19 @@ struct SensesNow {
     quiet: win::Quiet,
 }
 
+/// Маска текущего кадра того окна, которое её прислало.
 #[tauri::command]
-fn set_hit_mask(mask: State<'_, Arc<HitMask>>, rows: Vec<u32>) {
-    mask.set(rows);
+fn set_hit_mask(window: WebviewWindow, masks: State<'_, Arc<Masks>>, rows: Vec<u32>) {
+    masks.set(window.label(), rows);
+}
+
+/// Прятать ли питомца и миску от записи экрана и скриншотов.
+#[tauri::command]
+fn set_capture_hidden(app: AppHandle, hidden: bool) -> Result<(), String> {
+    for w in SPRITES.iter().filter_map(|l| app.get_webview_window(l)) {
+        w.set_content_protected(hidden).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -76,11 +95,13 @@ fn start_senses(s: Arc<Senses>) {
         .expect("senses tick thread");
 }
 
-/// Окно размером с питомца: прозрачное, поверх всех, без рамки, без значка на панели задач.
+/// Окно размером со спрайт: прозрачное, поверх всех, без рамки, без значка на панели задач.
 /// Фокус не берёт ни при показе, ни по клику — иначе клик по зверю свернул бы игру.
-fn build_pet_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+/// От записи экрана спрятано сразу: так стоит настройка по умолчанию, а выбранную
+/// фронтенд применит сам через set_capture_hidden.
+fn build_sprite_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWindow> {
     let side = SPRITE as f64 * ZOOM;
-    let mut b = WebviewWindowBuilder::new(app, "pet", WebviewUrl::App("index.html".into()))
+    let mut b = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
         .title("DeskPartner")
         .inner_size(side, side)
         .decorations(false)
@@ -90,8 +111,9 @@ fn build_pet_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .skip_taskbar(true)
         .resizable(false)
         .focused(false)
-        .focusable(false);
-    // пока сидит в правом нижнем углу над панелью задач; ходить научится позже
+        .focusable(false)
+        .content_protected(true);
+    // появляется в правом нижнем углу над панелью задач, дальше окно водит фронтенд (place_pet)
     if let Some(m) = app.primary_monitor()? {
         let sf = m.scale_factor();
         let wa = m.work_area();
@@ -102,18 +124,68 @@ fn build_pet_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     b.build()
 }
 
+/// Питомец и миска, у каждого свой поток прозрачности для кликов.
+fn open_sprites(app: &AppHandle) -> tauri::Result<()> {
+    let masks = app.state::<Arc<Masks>>().inner().clone();
+    for label in SPRITES {
+        hit::spawn(build_sprite_window(app, label)?, masks.clone());
+    }
+    Ok(())
+}
+
+/// Первый запуск: обычное окно, где выбирают папку данных.
+/// Закрыли, не закончив, — питомцу негде хранить свою жизнь, выходим.
+fn build_setup_window(app: &AppHandle) -> tauri::Result<()> {
+    let w = WebviewWindowBuilder::new(app, "setup", WebviewUrl::App("index.html".into()))
+        .title("DeskPartner — первый запуск")
+        .inner_size(560.0, 680.0)
+        .resizable(false)
+        .center()
+        .focused(true)
+        .build()?;
+    let app = app.clone();
+    w.on_window_event(move |e| {
+        // finish_setup открывает питомца раньше, чем закрывает это окно, — тогда не выходим
+        if matches!(e, WindowEvent::Destroyed) && app.get_webview_window("pet").is_none() {
+            app.exit(0);
+        }
+    });
+    Ok(())
+}
+
+/// Папка выбрана: открыть питомца и миску, закрыть окно первого запуска.
+/// async нарочно: синхронная команда выполняется в главном потоке, а создание WebView-окна
+/// оттуда на Windows виснет — построитель ждёт событийный цикл, который сам же и занимает
+/// (wry#583). Асинхронная идёт в пуле async-рантайма и только ставит окно в очередь цикла.
+#[tauri::command]
+async fn finish_setup(app: AppHandle) -> Result<(), String> {
+    if !store::has_dir() {
+        return Err("папка данных не выбрана".into());
+    }
+    // повторный вызов (двойной клик по кнопке) не должен строить окна с занятыми метками
+    if app.get_webview_window("pet").is_none() {
+        open_sprites(&app).map_err(|e| e.to_string())?;
+    }
+    if let Some(w) = app.get_webview_window("setup") {
+        w.close().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    // кошка умеет уходить за край экрана — отсюда её зовут обратно
+    let call = MenuItem::with_id(app, "call", "Позвать питомца", true, None::<&str>)?;
     // некормленый кот уходит навсегда — без этого пункта вернуть питомца было бы нечем
     let adopt = MenuItem::with_id(app, "adopt", "Новый котик", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&adopt, &quit])?;
+    let menu = Menu::with_items(app, &[&call, &adopt, &quit])?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("DeskPartner")
         .menu(&menu)
         .on_menu_event(|app, e| match e.id().as_ref() {
-            "adopt" => {
-                if let Err(err) = app.emit_to("pet", "adopt", ()) {
-                    eprintln!("adopt: {err}");
+            id @ ("call" | "adopt") => {
+                if let Err(err) = app.emit_to("pet", id, ()) {
+                    eprintln!("{id}: {err}");
                 }
             }
             "quit" => app.exit(0),
@@ -128,7 +200,6 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mask = Arc::new(HitMask::default());
     let now = Now::local();
     let feel = Arc::new(Senses {
         tracker: Arc::new(Mutex::new(Tracker::new(Day::new(&now.date), &now))),
@@ -137,14 +208,31 @@ pub fn run() {
     tauri::Builder::default()
         // второй экземпляр просто закрывается: два одинаковых питомца — уже не питомец
         .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
-        .manage(mask.clone())
+        // выбор папки данных в окне первого запуска
+        .plugin(tauri_plugin_dialog::init())
+        .manage(Arc::new(Masks::default()))
         .manage(feel.clone())
-        .invoke_handler(tauri::generate_handler![set_hit_mask, senses, world::world, world::place_pet])
+        .invoke_handler(tauri::generate_handler![
+            set_hit_mask,
+            set_capture_hidden,
+            finish_setup,
+            senses,
+            world::world,
+            world::place_pet,
+            store::data_dir,
+            store::suggest_dirs,
+            store::set_data_dir,
+            store::load_state,
+            store::save_state,
+        ])
         .setup(move |app| {
             #[cfg(windows)]
             start_senses(feel);
-            let pet = build_pet_window(app.handle())?;
-            hit::spawn(pet, mask);
+            if store::set_up() {
+                open_sprites(app.handle())?;
+            } else {
+                build_setup_window(app.handle())?;
+            }
             build_tray(app.handle())?;
             Ok(())
         })

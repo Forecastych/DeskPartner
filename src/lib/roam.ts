@@ -672,3 +672,26 @@ export function pickSpot(world: World, pet: Pet, kind: 'rest' | 'sleep', rnd: ()
   }
   return onLedge(pool[pool.length - 1]);
 }
+
+/**
+ * Отступ миски от правого края work в долях стороны спрайта. Кошка ест, наклонившись над миской,
+ * и её кадр сдвинут на 11 клеток вправо от окна миски: без отступа хвост уехал бы за край экрана.
+ */
+export const BOWL_INSET = 0.25;
+
+/**
+ * Где стоит окно миски: пол основного монитора у правого угла, x — середина окна.
+ * Кошка у миски стоит в той же точке: её окно ложится ровно на окно миски.
+ */
+export function bowlAt(world: World): Goal | null {
+  const i = Math.max(world.monitors.findIndex((m) => m.primary), 0);
+  const m = world.monitors[i];
+  if (!m) return null;
+  return { surface: floorId(i), x: m.work.right - side(m) * (0.5 + BOWL_INSET) - EDGE_GAP };
+}
+
+/** Стоит у миски: на полу под ней и не дальше пикселя. */
+export function atBowl(pet: Pet, world: World): boolean {
+  const b = bowlAt(world);
+  return b !== null && pet.move === 'still' && pet.on === b.surface && Math.abs(pet.x - b.x) < 1;
+}

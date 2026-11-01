@@ -1,12 +1,13 @@
-//! Клики сквозь окно питомца везде, кроме самого зверя.
+//! Клики сквозь окна-спрайты (питомец, миска) везде, кроме нарисованных пикселей.
 //!
 //! Прозрачный WebView ловит мышь всем прямоугольником, по пикселям Windows его не режет.
-//! Поэтому окно по умолчанию пропускает мышь насквозь, а отдельный поток часто смотрит,
-//! над каким пикселем спрайта курсор, и принимает мышь, только пока тот над зверем.
+//! Поэтому окно по умолчанию пропускает мышь насквозь, а отдельный поток на окно часто смотрит,
+//! над каким пикселем спрайта курсор, и принимает мышь, только пока тот над рисунком.
 //! С зажатым Alt клик проходит насквозь всегда.
-//! Тот же опрос кормит детектор тряски (shake.rs): потрясли курсором над зверем — событие "shake".
+//! У питомца тот же опрос кормит детектор тряски (shake.rs): потрясли курсором — событие "shake".
 
 use crate::shake::Shake;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,28 +19,32 @@ pub const SPRITE: u32 = 32;
 /// Как часто проверять курсор: 30 раз в секунду хватает, чтобы клик не проскочил мимо.
 const POLL: Duration = Duration::from_millis(33);
 
-/// Форма текущего кадра: по строке на ряд спрайта, бит x — в клетке нарисован пиксель.
+/// Формы текущих кадров по меткам окон: по строке на ряд спрайта, бит x — в клетке нарисован
+/// пиксель. Пока окно маску не прислало, оно целиком пропускает мышь.
 #[derive(Default)]
-pub struct HitMask(Mutex<Vec<u32>>);
+pub struct Masks(Mutex<HashMap<String, Vec<u32>>>);
 
-impl HitMask {
-    pub fn set(&self, rows: Vec<u32>) {
-        *self.0.lock().unwrap() = rows;
+impl Masks {
+    pub fn set(&self, label: &str, rows: Vec<u32>) {
+        self.0.lock().unwrap().insert(label.to_owned(), rows);
     }
 
-    fn contains(&self, x: i64, y: i64) -> bool {
+    fn contains(&self, label: &str, x: i64, y: i64) -> bool {
         if x < 0 || y < 0 || x >= SPRITE as i64 {
             return false;
         }
-        self.0.lock().unwrap().get(y as usize).is_some_and(|row| row >> x & 1 == 1)
+        let masks = self.0.lock().unwrap();
+        masks.get(label).and_then(|m| m.get(y as usize)).is_some_and(|row| row >> x & 1 == 1)
     }
 }
 
-pub fn spawn(window: WebviewWindow, mask: Arc<HitMask>) {
+pub fn spawn(window: WebviewWindow, masks: Arc<Masks>) {
     let _ = window.set_ignore_cursor_events(true);
     thread::spawn(move || {
+        let label = window.label().to_owned();
         let mut ignoring = true;
-        let mut shake = Shake::default();
+        // будят тряской только кошку: миске событие ни к чему
+        let mut shake = (label == "pet").then(Shake::default);
         loop {
             thread::sleep(POLL);
             // внутренняя область, а не внешняя: Windows добавляет невидимые поля даже окну без рамки.
@@ -57,21 +62,23 @@ pub fn spawn(window: WebviewWindow, mask: Arc<HitMask>) {
             let y = ((cy as f64 - top) / cell).floor() as i64;
             // трясут над всем квадратом, а не по силуэту: промах мимо уха не должен сбивать счёт.
             // Alt — «пропусти меня», с зажатой кнопкой человек что-то тащит: это не тряска.
-            let over = (0..SPRITE as i64).contains(&x) && (0..SPRITE as i64).contains(&y);
-            if over && !alt && !held {
-                if shake.feed(cx, cy, Instant::now()) {
-                    if let Err(err) = window.emit_to("pet", "shake", ()) {
-                        eprintln!("shake: {err}");
+            if let Some(shake) = shake.as_mut() {
+                let over = (0..SPRITE as i64).contains(&x) && (0..SPRITE as i64).contains(&y);
+                if over && !alt && !held {
+                    if shake.feed(cx, cy, Instant::now()) {
+                        if let Err(err) = window.emit_to("pet", "shake", ()) {
+                            eprintln!("shake: {err}");
+                        }
                     }
+                } else {
+                    shake.reset();
                 }
-            } else {
-                shake.reset();
             }
-            // пока кнопка зажата над зверем, не отпускаем мышь, даже если курсор съехал с силуэта
+            // пока кнопка зажата над рисунком, не отпускаем мышь, даже если курсор съехал с силуэта
             if !ignoring && held {
                 continue;
             }
-            let want = !mask.contains(x, y) || alt;
+            let want = !masks.contains(&label, x, y) || alt;
             if want != ignoring && window.set_ignore_cursor_events(want).is_ok() {
                 ignoring = want;
             }

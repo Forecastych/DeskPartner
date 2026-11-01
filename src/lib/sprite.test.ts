@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ANIMS, fatOn, FATS, flip, hitMask, onBowl, PALETTE, SIZE } from './sprite';
+import { ANIMS, BOWL_X, bowlFrame, bowlLeft, fatOn, FATS, flip, hitMask, onBowl, PALETTE, SIZE } from './sprite';
 
 const all = FATS.flatMap((fat) =>
   Object.entries(ANIMS[fat]).flatMap(([name, a]) => a.frames.map((f, i) => [`${name}[${i}] жир ${fat}`, f] as const)),
@@ -112,5 +112,36 @@ describe('сезонный жирок', () => {
         expect(plump).toBeGreaterThan(thin);
         expect(fat).toBeGreaterThan(plump);
       }
+  });
+});
+
+describe('окно миски', () => {
+  it('пустая миска совпадает с миской в позе hungry, отражённой влево', () => {
+    const empty = bowlFrame(0);
+    for (const fat of FATS)
+      for (const f of ANIMS[fat].hungry.frames) {
+        const g = flip(f);
+        expect(bowlLeft(g)).toBe(BOWL_X);
+        for (let y = 0; y < SIZE; y++)
+          for (let x = 0; x < SIZE; x++) if (onBowl(empty, x, y)) expect(g[y][x]).toBe(empty[y][x]);
+      }
+  });
+
+  it('горка растёт с порциями и вся кликается как миска', () => {
+    const sizes = [0, 1, 2, 3, 4, 6].map((n) => hitMask(bowlFrame(n)).reduce((a, r) => a + r.toString(2).replaceAll('0', '').length, 0));
+    expect(sizes[1]).toBeGreaterThan(sizes[0]);
+    expect(sizes[2]).toBe(sizes[3]);
+    expect(sizes[4]).toBeGreaterThan(sizes[3]);
+    expect(sizes[5]).toBe(sizes[4]);
+    const f = bowlFrame(6);
+    for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) if (f[y][x] !== '.') expect(onBowl(f, x, y)).toBe(true);
+  });
+
+  it('в позе еды миска левее на 11 клеток — настолько App сдвигает окно кошки', () => {
+    for (const fat of FATS) for (const f of ANIMS[fat].eat.frames) expect(BOWL_X - bowlLeft(flip(f))!).toBe(11);
+  });
+
+  it('без миски в кадре — null', () => {
+    expect(bowlLeft(ANIMS[0].sit.frames[0])).toBeNull();
   });
 });
