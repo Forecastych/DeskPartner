@@ -130,6 +130,8 @@
   let talk: chatter.Talk = chatter.fresh(Date.now(), chatterLevel, Math.random);
   /** Облачко висит до этих пор; 0 — молчит. */
   let speakingUntil = 0;
+  /** Облачко вызвано из трея dev-сборки: висит, даже если кошке не до разговоров. */
+  let forced = false;
   /** Последний ответ `senses`; null — Rust ещё не ответил. */
   let senses: Senses | null = null;
   /** Макушка кошки над серединой силуэта, физ. px: сюда облачко ставит хвостик. */
@@ -490,28 +492,52 @@
   /** Облачко: убрать, когда пора или кошке стало не до него; сказать новое, когда chatter решит. */
   function chat(now: number) {
     if (speakingUntil) {
-      if (now >= speakingUntil || !free()) hush();
+      if (now >= speakingUntil || (!free() && !forced)) hush();
       return;
     }
     if (frozen || !senses || !head) return;
-    const moment: chatter.Moment = {
+    const [next, line] = chatter.say(talk, moment(now, senses), chatterLevel, Math.random);
+    talk = next;
+    if (line) speak(line.text, now);
+  }
+
+  function moment(now: number, s: Senses): chatter.Moment {
+    return {
       now: new Date(now),
-      pause: !senses.idle && !senses.typing && (senses.quiet ?? 'no') === 'no',
-      session: senses.session_secs,
-      today: senses.active_today_secs,
+      pause: !s.idle && !s.typing && (s.quiet ?? 'no') === 'no',
+      session: s.session_secs,
+      today: s.active_today_secs,
       hungry: isHungry(belly) && !mealPending,
       free: free(),
     };
-    const [next, line] = chatter.say(talk, moment, chatterLevel, Math.random);
-    talk = next;
-    if (!line) return;
-    speakingUntil = now + chatter.shownFor(line.text);
-    invoke('say', { text: line.text, ...head }).catch(console.error);
+  }
+
+  function speak(text: string, now: number) {
+    if (!head) return;
+    speakingUntil = now + chatter.shownFor(text);
+    invoke('say', { text, ...head }).catch(console.error);
     persist(now);
+  }
+
+  /**
+   * «Сказать что-нибудь» из трея dev-сборки: облачко сразу, мимо паузы, сроков, сна и молчуна.
+   * Реплику выбирает тот же chatter.say — видно то, что кошка сказала бы сама.
+   */
+  function sayNow() {
+    if (frozen || !senses || !head || away()) return;
+    const now = Date.now();
+    if (speakingUntil) hush();
+    const m = { ...moment(now, senses), pause: true, free: true };
+    const [next, line] = chatter.say({ ...talk, spoke: 0, next: 0 }, m, 'often', Math.random);
+    if (!line) return;
+    talk = next;
+    forced = true;
+    speak(line.text, now);
   }
 
   function hush() {
     speakingUntil = 0;
+    forced = false;
     invoke('hush').catch(console.error);
   }
 
@@ -606,7 +632,7 @@
     place();
     tellBowl();
     tellBed();
-    if (speakingUntil && !free()) hush();
+    if (speakingUntil && !free() && !forced) hush();
   }
 
   /** У каждой анимации свой темп, поэтому таймер заводится заново на каждый кадр. */
@@ -790,6 +816,8 @@
       persist(Date.now());
       render();
     });
+    // пункт есть только в трее dev-сборки (lib.rs, debug_assertions)
+    const unsay = listen('dev-say', sayNow);
     // окно настроек уже сохранило файл; кеш обновляем, чтобы следующая галочка в меню не затёрла его старьём
     // Слушаем своим окном: глобальный listen поймал бы и наш же emitTo('settings', 'settings').
     const win = getCurrentWebviewWindow();
@@ -823,6 +851,11 @@
     // облачко смахнули кликом: окно уже спряталось само, кошка запоминает и болтает реже
     const unshoo = win.listen('bubble-shoo', () => {
       speakingUntil = 0;
+      // проверочное облачко смахнули — кошке не в укор
+      if (forced) {
+        forced = false;
+        return;
+      }
       talk = chatter.shoo(talk, chatterLevel, Math.random);
       persist(Date.now());
     });
@@ -832,7 +865,7 @@
       clearTimeout(timer);
       clearInterval(moving);
       clearInterval(id);
-      const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall];
+      const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay];
       for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, undrag, unlaser, unlaserOff, unshoo]) off.then((f) => f());
     };
   });

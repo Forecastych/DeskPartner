@@ -241,11 +241,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let settings = MenuItem::with_id(app, "settings", "Настройки…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&call, &adopt, &settings, &quit])?;
+    // проверить облачко, не дожидаясь паузы и срока; в релизную сборку не попадает
+    #[cfg(debug_assertions)]
+    menu.insert(&MenuItem::with_id(app, "dev-say", "Сказать что-нибудь (dev)", true, None::<&str>)?, 0)?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("DeskPartner")
         .menu(&menu)
         .on_menu_event(|app, e| match e.id().as_ref() {
-            id @ ("call" | "adopt") => {
+            id @ ("call" | "adopt" | "dev-say") => {
                 if let Err(err) = app.emit_to("pet", id, ()) {
                     eprintln!("{id}: {err}");
                 }
