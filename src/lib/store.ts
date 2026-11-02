@@ -1,7 +1,7 @@
 // Хранилище состояния: кеш в памяти + файлы в папке, которую выбрал человек (через Rust-команды).
 // Логика чистая и без @tauri-apps: бэкенд и старое хранилище подаются снаружи, поэтому тестируется без Tauri.
 
-export const KEYS = ['belly', 'sleep', 'stats', 'spot', 'settings'] as const;
+export const KEYS = ['belly', 'sleep', 'stats', 'spot', 'settings', 'bowl', 'bed'] as const;
 export type Key = (typeof KEYS)[number];
 
 export interface Backend {

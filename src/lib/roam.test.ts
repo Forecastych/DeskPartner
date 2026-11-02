@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   arcY,
+  atBed,
   atBowl,
+  bedAt,
   BONK_COOL,
   BONK_MS,
   bowlAt,
@@ -18,6 +20,7 @@ import {
   isRunning,
   POUNCE_MS,
   RECOIL,
+  release,
   RUN,
   goTo,
   jumpMs,
@@ -663,6 +666,118 @@ describe('миска', () => {
     expect(atBowl(pet, w)).toBe(false);
     [pet] = run(pet, w, 60_000);
     expect(atBowl(pet, w)).toBe(true);
+  });
+  it('поставили на другой монитор — стоит на его полу, к краю не ближе отступов', () => {
+    const w = world([monitor(0, 0, 1920, 1080), monitor(1920, 0, 2560, 1440, 1.5)]);
+    w.monitors[0].primary = true;
+    // бросили посреди второго монитора на высоте — миска всё равно на полу
+    expect(bowlAt(w, { x: 3000, y: 500 })).toMatchObject({ surface: 'floor:1', x: 3000, y: 1440 - 40, hwnd: null });
+    // у самого правого края — отодвинута, чтобы кошка у неё не ушла хвостом за экран
+    expect(bowlAt(w, { x: 4470, y: 900 })!.x).toBe(1920 + 2560 - SIDE * 1.5 * (0.5 + BOWL_INSET) - EDGE_GAP);
+    // за пределами всех мониторов — ближайший
+    expect(bowlAt(w, { x: -500, y: 300 })).toMatchObject({ surface: 'floor:0', x: SIDE / 2 + EDGE_GAP });
+  });
+
+  it('у миски, поставленной в другое место, — только там', () => {
+    const w = world([monitor(0, 0, 1920, 1080)]);
+    const at = { x: 700, y: 1040 };
+    let pet = goTo(spawn(w), w, bowlAt(w, at)!);
+    [pet] = run(pet, w, 60_000);
+    expect(atBowl(pet, w, at)).toBe(true);
+    expect(atBowl(pet, w)).toBe(false);
+  });
+
+  it('брошенная над окном встаёт на его рамку и запоминает окно', () => {
+    const w = world([FHD], [ledge(7, 600, 600, 1100)]);
+    expect(bowlAt(w, { x: 800, y: 580 })).toEqual({ surface: 'ledge:7:600', x: 800, y: 600, hwnd: 7, dx: 200 });
+    // отпустили ниже кромки — до пола
+    expect(bowlAt(w, { x: 800, y: 700 })).toMatchObject({ surface: 'floor:0', x: 800, y: 1040, hwnd: null });
+  });
+
+  it('окно двигают — миска едет с ним; окно закрыли — падает на пол', () => {
+    const w = world([FHD], [ledge(7, 600, 600, 1100)]);
+    const on = bowlAt(w, { x: 800, y: 580 })!;
+    const moved = world([FHD], [ledge(7, 700, 450, 1200)]);
+    expect(bowlAt(moved, on)).toMatchObject({ surface: 'ledge:7:700', x: 900, y: 450, hwnd: 7, dx: 200 });
+    expect(bowlAt(world([FHD]), on)).toMatchObject({ surface: 'floor:0', x: 800, y: 1040, hwnd: null });
+  });
+
+  it('рамку под миской загородили — падает ниже, на соседний открытый кусок не прыгает', () => {
+    const frame = { left: 600, top: 600, right: 1100, bottom: 1000 };
+    const w = world([FHD], [ledge(7, 600, 600, 1100)]);
+    const on = bowlAt(w, { x: 800, y: 580 })!;
+    const covered = world([FHD], [ledge(7, 600, 600, 750, frame), ledge(7, 900, 600, 1100, frame)]);
+    expect(bowlAt(covered, on)).toMatchObject({ surface: 'floor:0', x: 800, y: 1040 });
+  });
+
+  it('узкую рамку пролетает — на следующую под ней', () => {
+    const w = world([FHD], [ledge(8, 600, 500, 650), ledge(7, 400, 700, 1100)]);
+    expect(bowlAt(w, { x: 625, y: 480 })).toMatchObject({ surface: 'ledge:7:400', x: 625, y: 700, hwnd: 7 });
+  });
+
+  it('на полосу заголовка не ставится — она только поспать', () => {
+    const MAXED: Ledge = ledge(9, 0, 0, 1782, { left: 0, top: 0, right: 1920, bottom: 1040 });
+    const w: World = { ...world([FHD]), active: 9, strips: [MAXED] };
+    expect(surfaces(w).some((s) => s.strip)).toBe(true);
+    expect(bowlAt(w, { x: 1700, y: 0 })).toMatchObject({ surface: 'floor:0', y: 1040 });
+  });
+});
+
+describe('лежак', () => {
+  it('по умолчанию у левого угла основного монитора', () => {
+    const w = world([monitor(0, 0, 1920, 1080)]);
+    expect(bedAt(w)).toMatchObject({ surface: 'floor:0', x: SIDE / 2 + EDGE_GAP, y: 1040, hwnd: null });
+    expect(bedAt(world([]))).toBeNull();
+  });
+
+  it('у правого края отступ — полспрайта, без запаса миски', () => {
+    const w = world([monitor(0, 0, 1920, 1080)]);
+    expect(bedAt(w, { x: 5000, y: 1040 })!.x).toBe(1920 - SIDE / 2 - EDGE_GAP);
+  });
+
+  it('как миска — на рамку окна, и едет с ним', () => {
+    const w = world([FHD], [ledge(7, 600, 600, 1100)]);
+    const on = bedAt(w, { x: 1090, y: 500 })!;
+    expect(on).toEqual({ surface: 'ledge:7:600', x: 1100 - SIDE / 2 - EDGE_GAP, y: 600, hwnd: 7, dx: 500 - SIDE / 2 - EDGE_GAP });
+    const moved = world([FHD], [ledge(7, 300, 600, 800)]);
+    expect(bedAt(moved, on)).toMatchObject({ surface: 'ledge:7:300', x: 800 - SIDE / 2 - EDGE_GAP, hwnd: 7 });
+  });
+
+  it('дошла — в лежаке', () => {
+    const w = world([monitor(0, 0, 1920, 1080)]);
+    let pet = goTo(spawn(w), w, bedAt(w)!);
+    expect(atBed(pet, w)).toBe(false);
+    [pet] = run(pet, w, 60_000);
+    expect(atBed(pet, w)).toBe(true);
+  });
+});
+
+describe('кошку отпустили', () => {
+  it('падает с места, где отпустили, и встаёт на пол', () => {
+    const w = world([monitor(0, 0, 1920, 1080)]);
+    const pet = release(goTo(spawn(w), w, { surface: 'floor:0', x: 300 }), w, 900, 400);
+    expect(pet).toMatchObject({ x: 900, y: 400, move: 'fall', on: null, goal: null, exit: 0 });
+    const [p, events] = run(pet, w, 5_000);
+    expect(events[0]).toBe('landed');
+    expect(p).toMatchObject({ x: 900, y: 1040, on: 'floor:0', move: 'still' });
+  });
+
+  it('над окном — садится на его кромку', () => {
+    const w = world([monitor(0, 0, 1920, 1080)], [ledge(7, 400, 600, 1400)]);
+    const [p] = run(release(spawn(w), w, 900, 300), w, 5_000);
+    expect(p).toMatchObject({ on: 'ledge:7:400', y: 600, hwnd: 7 });
+  });
+
+  it('за краем экрана и под панелью задач — возвращается в рабочую область', () => {
+    const w = world([monitor(0, 0, 1920, 1080)]);
+    expect(release(spawn(w), w, 1919, 1075)).toMatchObject({ x: 1920 - SIDE / 2, y: 1040 });
+    expect(release(spawn(w), w, -300, 5)).toMatchObject({ x: SIDE / 2, y: SIDE });
+  });
+
+  it('охота снята', () => {
+    const w = world([monitor(0, 0, 1920, 1080)]);
+    const hunting = { ...spawn(w), hunt: { mode: 'run' } } as unknown as Pet;
+    expect(release(hunting, w, 500, 500).hunt).toBeUndefined();
   });
 });
 

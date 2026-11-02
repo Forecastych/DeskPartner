@@ -7,7 +7,7 @@
   import * as roam from './lib/roam';
   import { parse, serialize, type Settings } from './lib/settings';
   import * as sleepy from './lib/sleep';
-  import { ANIMS, BOWL_X, bowlLeft, draw, fatOn, flip, ground, hitMask, onBowl, SIZE, type AnimName, type Frame } from './lib/sprite';
+  import { ANIMS, BOWL_X, bowlLeft, draw, fatOn, flip, ground, hitMask, onBowl, SCRUFF_AT, SIZE, type AnimName, type Frame } from './lib/sprite';
   import { localLegacy, memoryStore, open, tauriBackend, type Store } from './lib/store';
 
   const PETTED_MS = 1500;
@@ -27,7 +27,7 @@
   const BONK_MS = 800;
   /** Шаг движения: 25 раз в секунду — окно едет ровно, а Rust успевает его двигать. */
   const MOVE_MS = 40;
-  /** Мониторы и окна перечитываются раз в секунду; пока кошка сидит на чужом окне — чаще: его могут потащить. */
+  /** Мониторы и окна перечитываются раз в секунду; пока кошка, миска или лежак на чужом окне — чаще: его могут потащить. */
   const WORLD_MS = 1000;
   const PERCH_WORLD_MS = 200;
   /** С такой вероятностью, сменив позу отдыха, кошка перебирается на другое место. */
@@ -38,6 +38,8 @@
   const SAVE_MS = 60_000;
   /** Пока кошки нет на экране, проверять, не вернулась ли, раз в секунду. */
   const AWAY_TICK_MS = 1000;
+  /** С лежаком засыпать уходит в него чаще, чем куда-то ещё. */
+  const BED_SLEEP = 0.8;
   const NO_MASK: number[] = Array(SIZE).fill(0);
 
   /** Крайние столбцы «з-з-з»: из-за края экрана выглядывают только они, а не пустое окно. */
@@ -83,8 +85,25 @@
     }
   }
 
+  /** Где человек поставил миску или лежак. Без места — по углам основного монитора. */
+  function loadPlace(key: 'bowl' | 'bed'): roam.Place | null {
+    try {
+      const p = JSON.parse(store.get(key) ?? 'null');
+      return Number.isFinite(p?.x) && Number.isFinite(p?.y) ? { x: p.x, y: p.y } : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** Галочка «Кормушка»: из файла настроек, ПКМ-меню кошки или окна настроек. */
   let feederOn = false;
+  /** Галочка «Лежак» — оттуда же. */
+  let bedOn = false;
+  let bowlPlace: roam.Place | null = null;
+  let bedPlace: roam.Place | null = null;
+  /** Миска или лежак упали: окно вещи покажет падение, а не прыгнет на место. */
+  let bowlFall = false;
+  let bedFall = false;
   /** Окно настроек переносит папку данных: до перезапуска ничего не пишем, иначе запись уйдёт мимо переезда. */
   let frozen = false;
   let belly: Belly = fresh();
@@ -93,6 +112,11 @@
   /** Покормили, а кошка не у миски: сначала дойдёт, потом ест. Корм тем временем лежит в миске. */
   let mealPending = false;
   let lastBowl = '';
+  let lastBed = '';
+  /** ЛКМ зажата на кошке: потянут — понесут, отпустят на месте — погладили. */
+  let holding = false;
+  /** Несут за шкирку: окно двигает Rust, мир кошку не трогает. */
+  let carried = false;
 
   let canvas: HTMLCanvasElement;
   let anim: AnimName | null = 'sit';
@@ -134,27 +158,79 @@
     store.set('sleep', sleepy.save(nap));
     store.set('stats', JSON.stringify(stats));
     if (pet) store.set('spot', JSON.stringify(roam.spotOf(pet)));
+    // окно-опору не храним: после перезапуска у окон другие hwnd — вещь найдёт рамку по точке
+    if (bowlPlace) store.set('bowl', JSON.stringify({ x: Math.round(bowlPlace.x), y: Math.round(bowlPlace.y) }));
+    if (bedPlace) store.set('bed', JSON.stringify({ x: Math.round(bedPlace.x), y: Math.round(bedPlace.y) }));
   }
 
-  /** Окно миски рисует корм: запас кормушки (виден и при выключенной) и насыпанное, пока кошка идёт есть. */
+  /** Где стоит вещь — в координаты окна для place_pet; мира нет — null, окно стоит, где стояло. */
+  function windowAt(t: roam.Thing | null): { x: number | null; bottom: number | null } {
+    return t ? { x: Math.round(t.x), bottom: Math.round(t.y) } : { x: null, bottom: null };
+  }
+
+  /** Вещь упала, а не уехала с окном: опустилась и стоит уже не на своём окне. */
+  const fell = (was: roam.Place, now: roam.Thing): boolean =>
+    now.y > was.y + 1 && !(was.hwnd != null && was.hwnd === now.hwnd);
+
+  /** Мир сменился: вещи на рамках едут за окнами, а без окна под собой падают ниже. */
+  function resettle() {
+    if (!world) return;
+    const bowl = bowlPlace && roam.bowlAt(world, bowlPlace);
+    if (bowlPlace && bowl) [bowlFall, bowlPlace] = [bowlFall || fell(bowlPlace, bowl), bowl];
+    const bed = bedPlace && roam.bedAt(world, bedPlace);
+    if (bedPlace && bed) [bedFall, bedPlace] = [bedFall || fell(bedPlace, bed), bed];
+  }
+
+  /**
+   * Окно миски рисует корм: запас кормушки (виден и при выключенной) и насыпанное, пока кошка идёт есть.
+   * И встаёт, куда его поставили: место считаем здесь, тут же, где кошка к нему ходит.
+   */
   function tellBowl() {
     const portions = belly.feeder + (mealPending ? 1 : 0);
-    const key = String(portions);
+    const at = windowAt(world && roam.bowlAt(world, bowlPlace));
+    const fall = bowlFall;
+    bowlFall = false;
+    const key = `${portions} ${at.x} ${at.bottom}`;
     if (key === lastBowl) return;
     lastBowl = key;
-    emitTo('bowl', 'bowl', { portions }).catch(console.error);
+    emitTo('bowl', 'bowl', { portions, ...at, fall }).catch(console.error);
+  }
+
+  /** Окно лежака: выключен — пустое и сквозное; включён — там, где поставили. */
+  function tellBed() {
+    const at = windowAt(world && roam.bedAt(world, bedPlace));
+    const fall = bedFall;
+    bedFall = false;
+    const key = `${bedOn} ${at.x} ${at.bottom}`;
+    if (key === lastBed) return;
+    lastBed = key;
+    emitTo('bed', 'bed', { on: bedOn, ...at, fall }).catch(console.error);
+  }
+
+  /** Миску или лежак перетащили и бросили: падает на ближайшую рамку окна под собой или на пол. */
+  function putDown(thing: 'bowl' | 'bed', x: number, bottom: number) {
+    const place = world && (thing === 'bowl' ? roam.bowlAt : roam.bedAt)(world, { x, y: bottom });
+    if (place) {
+      // окно вещи осталось там, где отпустили: оттуда и падает
+      if (thing === 'bowl') [bowlPlace, bowlFall] = [place, true];
+      else [bedPlace, bedFall] = [place, true];
+      persist(Date.now());
+    }
+    // бросили туда же, откуда взяли, — ключ не сменился, а окно надо вернуть на опору
+    lastBowl = lastBed = '';
+    render();
   }
 
   /** Мира нет (не Windows, экран блокировки) — миска нарисована в кадре кошки, идти никуда не надо. */
-  const atBowl = (): boolean => !pet || !world || roam.atBowl(pet, world);
+  const atBowl = (): boolean => !pet || !world || roam.atBowl(pet, world, bowlPlace);
 
   /** К миске; у миски — мордой к ней, она справа. */
   function toBowl() {
     if (!pet || !world || pet.move === 'out' || away() || pet.hunt) return;
-    const b = roam.bowlAt(world);
+    const b = roam.bowlAt(world, bowlPlace);
     if (!b) return;
-    if (roam.atBowl(pet, world)) pet = { ...pet, facing: -1 };
-    else if (pet.goal?.surface !== b.surface || pet.goal.x !== b.x) pet = roam.goTo(pet, world, b);
+    if (roam.atBowl(pet, world, bowlPlace)) pet = { ...pet, facing: -1 };
+    else if (pet.goal?.surface !== b.surface || pet.goal.x !== b.x) pet = roam.goTo(pet, world, { surface: b.surface, x: b.x });
   }
 
   /** Еда в миске: у миски — ест сразу, иначе сначала идёт к ней. */
@@ -216,9 +292,11 @@
     } else groomUntil = now + GROOM_MS;
   }
 
-  /** Перебраться на другое место: посидеть у края пола или на окне, поспать — лучше на окне. */
+  /** Перебраться на другое место: посидеть у края пола или на окне, поспать — лучше на окне, а есть лежак — в нём. */
   function wander(kind: 'rest' | 'sleep') {
-    if (pet && world && pet.move !== 'out' && !away() && !pet.hunt) pet = roam.goTo(pet, world, roam.pickSpot(world, pet, kind, Math.random));
+    if (!pet || !world || pet.move === 'out' || away() || pet.hunt) return;
+    const bed = kind === 'sleep' && bedOn && Math.random() < BED_SLEEP ? roam.bedAt(world, bedPlace) : null;
+    pet = roam.goTo(pet, world, bed ? { surface: bed.surface, x: bed.x } : roam.pickSpot(world, pet, kind, Math.random));
   }
 
   /**
@@ -259,7 +337,8 @@
 
     // Уход и возвращение сверяются с голодом и сном каждый кадр, а не только по событиям:
     // так их не потерять ни при запуске, ни при побудке, ни при «Новом котике».
-    if (pet && world) {
+    // несомую мир не двигает: уйти за край или к миске она успеет, когда отпустят
+    if (pet && world && !carried) {
       if (!away()) {
         if (pet.move === 'out') comeBack(now);
       } else if (pet.move !== 'out' && pet.exit === 0) pet = roam.leave(pet, world);
@@ -282,6 +361,7 @@
 
   /** Поза на сейчас; null — кошки на экране нет. */
   function choose(now: number): AnimName | null {
+    if (carried) return 'carried';
     if (pet?.hunt) {
       if (now < bonkUntil || pet.hunt.mode === 'bonk') return 'bonk';
       if (roam.isRunning(pet)) return 'run';
@@ -298,7 +378,10 @@
     if (now < pettedUntil) return 'petted';
     if (now < eatUntil) return 'eat';
     if (mood === 'angry' || mood === 'groggy') return mood;
-    if (mood === 'asleep') return pet && roam.onStrip(pet) ? 'sleep' : (sleepPose ??= pick(SLEEPS));
+    if (mood === 'asleep') {
+      if (bedOn && pet && world && roam.atBed(pet, world, bedPlace)) return 'bed';
+      return pet && roam.onStrip(pet) ? 'sleep' : (sleepPose ??= pick(SLEEPS));
+    }
     // проснулась голодной — сначала к миске, умыться успеет потом; не дошла — сидит и ждёт пути
     if (isHungry(belly) || mealPending) return atBowl() ? 'hungry' : 'sit';
     if (now < groomUntil) return 'groom';
@@ -316,14 +399,14 @@
    * «З-з-з» выглядывают из-за того края, за которым она спит, — на экране только буквы.
    */
   function place() {
-    if (!pet || !world) return;
+    if (!pet || !world || carried) return;
     const m = roam.monitorOf(world, pet);
     if (!m) return;
     const half = roam.side(m) / 2;
     const cell = roam.side(m) / SIZE;
     let x = pet.x;
     // у миски окно кошки ложится так, чтобы миска в кадре совпала с окном миски: ест — наклоняется
-    const bowl = roam.atBowl(pet, world) ? bowlLeft(frame) : null;
+    const bowl = roam.atBowl(pet, world, bowlPlace) ? bowlLeft(frame) : null;
     if (bowl !== null) x += (BOWL_X - bowl) * cell;
     if (anim === 'zzz') x = pet.exit < 0 ? m.work.left + half - Z_LEFT * cell : m.work.right + half - (Z_RIGHT + 1) * cell;
     const bottom = pet.y + (SIZE - 1 - (anim ? ground(anim) : SIZE - 1)) * cell;
@@ -342,6 +425,10 @@
     try {
       const w = await invoke<roam.World>('world');
       world = w.monitors.length ? w : null;
+      // миска и лежак на рамках едут за окнами тем же шагом, что и кошка на насесте
+      resettle();
+      tellBowl();
+      tellBed();
     } catch (e) {
       console.error(e);
     } finally {
@@ -354,7 +441,7 @@
     const now = Date.now();
     const dt = now - lastMove;
     lastMove = now;
-    if (pet && world) {
+    if (pet && world && !carried) {
       const was = `${pet.move} ${pet.hunt?.mode}`;
       let event: ReturnType<typeof roam.chase>[1] = null;
       if (dot && hunting(now)) {
@@ -374,7 +461,7 @@
         groomOnArrival = false;
         groomUntil = now + GROOM_MS;
       }
-      if (event === 'arrived' && roam.atBowl(pet, world)) {
+      if (event === 'arrived' && roam.atBowl(pet, world, bowlPlace)) {
         pet = { ...pet, facing: -1 };
         if (mealPending) {
           mealPending = false;
@@ -387,7 +474,8 @@
       if (`${pet.move} ${pet.hunt?.mode}` !== was) render();
       else place();
     }
-    if (now - lastWorld >= (pet?.hwnd != null ? PERCH_WORLD_MS : WORLD_MS)) survey();
+    const perched = pet?.hwnd != null || bowlPlace?.hwnd != null || (bedOn && bedPlace?.hwnd != null);
+    if (now - lastWorld >= (perched ? PERCH_WORLD_MS : WORLD_MS)) survey();
   }
 
   function render() {
@@ -411,7 +499,7 @@
     }
     // Rust пропускает клики сквозь всё, что не нарисовано, — сообщаем ему форму кадра, если она сменилась.
     // Кошку в пути не поймать: пока идёт, прыгает или падает, клики проходят насквозь.
-    const mask = anim && (!pet || pet.move === 'still') ? hitMask(frame) : NO_MASK;
+    const mask = anim && (carried || !pet || pet.move === 'still') ? hitMask(frame) : NO_MASK;
     const key = mask.join(',');
     if (key !== lastMask) {
       lastMask = key;
@@ -419,6 +507,7 @@
     }
     place();
     tellBowl();
+    tellBed();
   }
 
   /** У каждой анимации свой темп, поэтому таймер заводится заново на каждый кадр. */
@@ -428,30 +517,66 @@
     timer = setTimeout(loop, anim ? ANIMS[0][anim].ms : AWAY_TICK_MS);
   }
 
-  /** Клик по кошке гладит, по миске в её кадре — то же, что клик по окну миски. */
-  function poke(e: PointerEvent) {
+  /**
+   * Клик по кошке гладит, по миске в её кадре — то же, что клик по окну миски.
+   * Потянули с зажатой ЛКМ — берут за шкирку и несут; отпустили — падает на то, что под ней.
+   */
+  async function poke(e: PointerEvent) {
     const r = canvas.getBoundingClientRect();
     const x = Math.floor(((e.clientX - r.left) / r.width) * SIZE);
     const y = Math.floor(((e.clientY - r.top) / r.height) * SIZE);
-    const now = Date.now();
-    if (onBowl(frame, x, y)) return bowlClick(e.button, now);
+    if (onBowl(frame, x, y)) return bowlClick(e.button, Date.now());
     if (e.button === 2) return void showMenu();
-    if (e.button === 0 && !disturb(now)) {
+    if (e.button !== 0 || holding) return;
+    holding = true;
+    // шкирка — в CSS px от угла окна: Rust подвинет окно так, чтобы она оказалась под курсором
+    const cell = r.width / SIZE;
+    const grab = [r.left + SCRUFF_AT[0] * cell, r.top + SCRUFF_AT[1] * cell];
+    let drop: { x: number; bottom: number } | null = null;
+    try {
+      drop = await invoke<{ x: number; bottom: number } | null>('drag_window', { grab });
+    } catch (err) {
+      console.error(err);
+    }
+    holding = false;
+    const now = Date.now();
+    // drop без carried — drag-start обогнал ответ команды; окно всё равно уехало
+    if (carried || drop) {
+      carried = false;
+      lastPlace = '';
+      if (drop && pet && world) pet = roam.release(pet, world, drop.x, drop.bottom);
+      lastMove = now;
+      persist(now);
+    } else if (!disturb(now)) {
       pettedUntil = now + PETTED_MS;
       stats.petted++;
     }
     render();
   }
 
+  /** Rust сообщил, что кошку потянули: всё, чем была занята, бросает, спящая просыпается. */
+  function pickUp() {
+    if (!holding) return;
+    carried = true;
+    eatUntil = groomUntil = pettedUntil = bonkUntil = 0;
+    groomOnArrival = false;
+    if (hunted && pet) pet = roam.endChase(pet);
+    hunted = false;
+    disturb(Date.now());
+    render();
+  }
+
   /** Настройки сменились здесь или в окне настроек — кошка и миска подстраиваются сразу. */
   function applySettings(s: Settings) {
     feederOn = s.feeder;
+    bedOn = s.bed;
     invoke('set_capture_hidden', { hidden: s.hideFromCapture }).catch(console.error);
     tellBowl();
+    tellBed();
   }
 
   /** Галочка в ПКМ-меню: сохранить, применить и показать открытому окну настроек. */
-  function toggle(field: 'feeder' | 'hideFromCapture') {
+  function toggle(field: 'feeder' | 'bed' | 'hideFromCapture') {
     if (frozen) return;
     const s = parse(store.get('settings'));
     s[field] = !s[field];
@@ -465,6 +590,7 @@
     const s = parse(store.get('settings'));
     const items = [
       { id: 'feeder', text: 'Кормушка', checked: s.feeder, hint: s.feeder ? 'клик по миске — про запас' : 'клик по миске — покормить сейчас' },
+      { id: 'bed', text: 'Лежак', checked: s.bed, hint: 'тащи мышью, как и миску' },
       { id: 'hideFromCapture', text: 'Прятать от записи экрана', checked: s.hideFromCapture },
       { id: 'laser', text: 'Лазерная указка', checked: dot !== null, hint: 'или зажать Ctrl; Esc — выключить' },
       { separator: true },
@@ -474,7 +600,7 @@
   }
 
   function menuPick(id: string) {
-    if (id === 'feeder' || id === 'hideFromCapture') toggle(id);
+    if (id === 'feeder' || id === 'bed' || id === 'hideFromCapture') toggle(id);
     else if (id === 'laser') invoke('set_laser', { on: dot === null }).catch(console.error);
     else if (id === 'settings') invoke('open_settings').catch(console.error);
   }
@@ -502,6 +628,9 @@
       store = opened;
       const settings = parse(store.get('settings'));
       feederOn = settings.feeder;
+      bedOn = settings.bed;
+      bowlPlace = loadPlace('bowl');
+      bedPlace = loadPlace('bed');
       // Rust создаёт окна спрятанными от записи экрана; выключил человек галочку — показываемся
       invoke('set_capture_hidden', { hidden: settings.hideFromCapture }).catch(console.error);
       belly = load(store.get('belly'));
@@ -529,10 +658,20 @@
       if (disturb(Date.now())) render();
     });
     const unclick = listen<{ button: number }>('bowl-click', (e) => bowlClick(e.payload.button, Date.now()));
-    // окно миски открылось позже кошки — расскажем ему про корм ещё раз
+    // окна миски и лежака открылись позже кошки — расскажем им всё ещё раз
     const unhello = listen('bowl-hello', () => {
       lastBowl = '';
       tellBowl();
+    });
+    const unbedHello = listen('bed-hello', () => {
+      lastBed = '';
+      tellBed();
+    });
+    const unbowlDrop = listen<{ x: number; bottom: number }>('bowl-drop', (e) => putDown('bowl', e.payload.x, e.payload.bottom));
+    const unbedDrop = listen<{ x: number; bottom: number }>('bed-drop', (e) => putDown('bed', e.payload.x, e.payload.bottom));
+    // лежак потащили из-под спящей кошки — будит, как клик
+    const unbedGrab = listen('bed-grab', () => {
+      if (pet && world && roam.atBed(pet, world, bedPlace) && disturb(Date.now())) render();
     });
     // «Позвать питомца» в трее. Досыпает за краем в обиде — прощает и приходит оттуда же
     // (вход сделает live()); ушедшую за едой и пропавшую зов не вернёт. Дома зов ничего не
@@ -565,6 +704,8 @@
       frozen = false;
     });
     const unpick = win.listen<{ id: string }>('menu-pick', (e) => menuPick(e.payload.id));
+    // своим окном: такое же событие Rust шлёт и окнам миски и лежака
+    const undrag = win.listen('drag-start', pickUp);
     // лазер: Rust шлёт курсор, пока указка включена, — охоту ведёт move()
     const unlaser = win.listen<roam.Dot>('laser', (e) => {
       dot = e.payload;
@@ -578,7 +719,8 @@
       clearTimeout(timer);
       clearInterval(moving);
       clearInterval(id);
-      for (const off of [unlisten, unshake, unclick, unhello, uncall, unsettings, unfreeze, unthaw, unpick, unlaser, unlaserOff]) off.then((f) => f());
+      const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall];
+      for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, undrag, unlaser, unlaserOff]) off.then((f) => f());
     };
   });
 </script>

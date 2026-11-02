@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ANIMS, BOWL_X, bowlFrame, bowlLeft, fatOn, FATS, flip, hitMask, onBowl, PALETTE, SIZE } from './sprite';
+import { ANIMS, bedFrame, bedMask, BOWL_X, bowlFrame, bowlLeft, fatOn, FATS, flip, hitMask, onBowl, PALETTE, SCRUFF_AT, SIZE } from './sprite';
 
 const all = FATS.flatMap((fat) =>
   Object.entries(ANIMS[fat]).flatMap(([name, a]) => a.frames.map((f, i) => [`${name}[${i}] жир ${fat}`, f] as const)),
@@ -27,7 +27,7 @@ describe('кадры', () => {
 
   it('всё, кроме сна на рамке, стоит на земле — нижний ряд закрашен', () => {
     for (const fat of FATS)
-      for (const name of ['stand', 'walk', 'sit', 'loaf', 'sideLoaf', 'faceplant', 'sidePlant', 'groom', 'hungry', 'eat', 'groggy', 'angry'] as const)
+      for (const name of ['stand', 'walk', 'sit', 'loaf', 'sideLoaf', 'faceplant', 'sidePlant', 'groom', 'hungry', 'eat', 'groggy', 'angry', 'carried'] as const)
         for (const f of ANIMS[fat][name].frames) expect(hitMask(f)[SIZE - 1]).not.toBe(0);
   });
 
@@ -47,6 +47,40 @@ describe('кадры', () => {
     const f = ANIMS[0].walk.frames[0];
     expect(flip(f)[20]).toBe([...f[20]].reverse().join(''));
     expect(flip(flip(f))).toEqual(f);
+  });
+});
+
+describe('лежак', () => {
+  it('в лежаке кошка над бортиком, а сам бортик пропускает клик к окну лежака', () => {
+    for (const f of FATS.flatMap((fat) => ANIMS[fat].bed.frames)) {
+      const mask = hitMask(f);
+      for (let y = SIZE - 5; y < SIZE; y++) expect(mask[y]).toBe(0);
+      expect(width(mask[SIZE - 6])).toBeGreaterThan(15);
+      expect(f[SIZE - 1]).toContain('R');
+    }
+  });
+
+  it('передний бортик в кадре кошки ложится ровно на бортик окна лежака', () => {
+    const bed = bedFrame();
+    for (const f of ANIMS[0].bed.frames) expect(f.slice(SIZE - 5)).toEqual(bed.slice(SIZE - 5));
+  });
+
+  it('окно лежака кликабельно по всему лежаку, и он симметричен — flip ему не страшен', () => {
+    const bed = bedFrame();
+    expect(area(bed)).toBe(0);
+    for (let y = 0; y < SIZE; y++) expect(bedMask(bed)[y] !== 0).toBe(/[Rrq]/.test(bed[y]));
+    expect(flip(bed)).toEqual(bed);
+  });
+});
+
+describe('за шкирку', () => {
+  it('висит загривком в SCRUFF_AT, а кадр симметричен по контуру', () => {
+    const [x, y] = [SCRUFF_AT[0], Math.floor(SCRUFF_AT[1])];
+    for (const f of FATS.flatMap((fat) => ANIMS[fat].carried.frames)) {
+      expect(f[y][x]).not.toBe('.');
+      expect(f[y][x - 1]).not.toBe('.');
+      expect(hitMask(flip(f))).toEqual(hitMask(f));
+    }
   });
 });
 

@@ -4,7 +4,7 @@ import { defaults, parse, serialize } from './settings';
 describe('настройки', () => {
   it('по умолчанию осторожная версия, но от записи экрана прячемся', () => {
     const d = defaults();
-    expect(d).toMatchObject({ feeder: false, gameWindow: false, sites: false, reviews: false, hideFromCapture: true });
+    expect(d).toMatchObject({ feeder: false, bed: false, gameWindow: false, sites: false, reviews: false, hideFromCapture: true });
     expect(d).toMatchObject({ mode: 'calm', chatter: 'sometimes', topics: [], tmdbKey: '' });
   });
 
@@ -19,8 +19,8 @@ describe('настройки', () => {
   });
 
   it('битое поле заменяется поштучно, остальные живут', () => {
-    const s = parse(JSON.stringify({ feeder: true, mode: 'chaos', chatter: 1, topics: ['космос', 'вязание', 7], tmdbKey: '  k  ' }));
-    expect(s).toMatchObject({ feeder: true, mode: 'calm', chatter: 'sometimes', topics: ['космос'], tmdbKey: 'k' });
+    const s = parse(JSON.stringify({ feeder: true, bed: 'yes', mode: 'chaos', chatter: 1, topics: ['космос', 'вязание', 7], tmdbKey: '  k  ' }));
+    expect(s).toMatchObject({ feeder: true, bed: false, mode: 'calm', chatter: 'sometimes', topics: ['космос'], tmdbKey: 'k' });
   });
 
   it('темы — в порядке списка и без повторов', () => {

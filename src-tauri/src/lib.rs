@@ -26,11 +26,12 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, Webvi
 const ZOOM: f64 = 4.0;
 
 /// Окна-спрайты на рабочем столе. Порядок — это порядок по глубине: построенное позже
-/// ложится сверху, и кошка, что пришла есть, должна быть перед миской, а не под горкой корма.
-const SPRITES: [&str; 2] = ["bowl", "pet"];
+/// ложится сверху, и кошка, что пришла есть, должна быть перед миской, а не под горкой корма,
+/// а лежак — под всеми: кошка в нём, а не за ним.
+const SPRITES: [&str; 3] = ["bed", "bowl", "pet"];
 
 /// Кого прячет галочка «Прятать от записи экрана». Точку лазера и её эффекты laser.rs прячет всегда сам.
-const CAPTURED: [&str; 3] = ["bowl", "pet", "menu"];
+const CAPTURED: [&str; 4] = ["bed", "bowl", "pet", "menu"];
 
 /// Что питомец знает о человеке прямо сейчас.
 struct Senses {
@@ -130,7 +131,7 @@ fn build_sprite_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWin
     b.build()
 }
 
-/// Питомец и миска, у каждого свой поток прозрачности для кликов.
+/// Питомец, миска и лежак, у каждого свой поток прозрачности для кликов.
 fn open_sprites(app: &AppHandle) -> tauri::Result<()> {
     let masks = app.state::<Arc<Masks>>().inner().clone();
     for label in SPRITES {
@@ -290,6 +291,7 @@ pub fn run() {
             senses,
             world::world,
             world::place_pet,
+            hit::drag_window,
             store::data_dir,
             store::suggest_dirs,
             store::set_data_dir,

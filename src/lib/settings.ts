@@ -14,6 +14,8 @@ export type Chatter = (typeof CHATTER)[number];
 export interface Settings {
   /** Кормушка: насыпал порций — кошка ест сама, когда проголодается. */
   feeder: boolean;
+  /** Лежак на полу: кошка чаще спит в нём, чем на рамках окон. */
+  bed: boolean;
   /** Не попадать в скриншоты и запись экрана (WDA_EXCLUDEFROMCAPTURE). */
   hideFromCapture: boolean;
   /** Пока только кошка; собака и дракон позже. */
@@ -34,6 +36,7 @@ export interface Settings {
 export function defaults(): Settings {
   return {
     feeder: false,
+    bed: false,
     hideFromCapture: true,
     pet: 'cat',
     topics: [],
@@ -66,6 +69,7 @@ export function parse(raw: string | null): Settings {
   const s = o as Record<string, unknown>;
   return {
     feeder: bool(s.feeder, d.feeder),
+    bed: bool(s.bed, d.bed),
     hideFromCapture: bool(s.hideFromCapture, d.hideFromCapture),
     pet: 'cat',
     topics: Array.isArray(s.topics) ? TOPICS.filter((t) => (s.topics as unknown[]).includes(t)) : d.topics,

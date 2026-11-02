@@ -24,6 +24,9 @@ export const PALETTE: Record<string, string> = {
   b: '#5b8fd9', // миска
   c: '#c98d4b', // корм
   C: '#8a5a2b', // корм потемнее
+  R: '#5a3a2e', // контур лежака
+  r: '#b5654a', // лежак
+  q: '#f0dcb8', // подушка в лежаке
 };
 
 /** Миска и корм в ней: клик сюда кормит, а не гладит. */
@@ -31,6 +34,9 @@ const BOWL_KEYS = new Set(['B', 'b', 'c', 'C']);
 
 /** Украшения не часть зверя: клик по сердечку, «з-з-з» или звёздочкам проходит насквозь. */
 const DECOR = new Set(['h', 'z', 's']);
+
+/** Перед лежака в кадре спящей кошки: клик по нему уходит окну лежака под ней — за него лежак и таскают. */
+const THROUGH = new Set([...DECOR, 'R', 'r', 'q']);
 
 // Голова анфас, 12×10: кошка идёт боком, но смотрит на человека.
 const HEAD_TOP: Part = [
@@ -185,6 +191,21 @@ const BOWL: Part = ['BBBBBBBBBB', 'BbbbbbbbbB', 'BbbbbbbbbB', '.BbbbbbbB.', '..B
 const KIBBLE: Part = ['..cCccCc..', '.cccCcccC.'];
 // В кормушке горка растёт с числом порций: одна, две-три, четыре и больше.
 const PILES: Part[] = [KIBBLE, ['...cCcc...', ...KIBBLE], ['....cC....', '...cCcc...', ...KIBBLE]];
+
+// Лежак 30×9: задний бортик, подушка, передний бортик (с ряда 4 — он же `BED_FRONT`).
+const BED: Part = [
+  '...RRRRRRRRRRRRRRRRRRRRRRRR...',
+  '..RrrrrrrrrrrrrrrrrrrrrrrrrR..',
+  '.RrrRqqqqqqqqqqqqqqqqqqqqRrrR.',
+  'RrrrRqqqqqqqqqqqqqqqqqqqqRrrrR',
+  'RrrrrRRRRRRRRRRRRRRRRRRRRrrrrR',
+  'RrrrrrrrrrrrrrrrrrrrrrrrrrrrrR',
+  'RrrrrrrrrrrrrrrrrrrrrrrrrrrrrR',
+  '.RrrrrrrrrrrrrrrrrrrrrrrrrrrR.',
+  '..RRRRRRRRRRRRRRRRRRRRRRRRRR..',
+];
+/** Передний бортик закрывает кошку в лежаке снизу; хвост с подушки ложится на левый бортик. */
+const BED_FRONT: Part = BED.slice(4);
 
 const HEART: Part = ['.hh.hh.', 'hhhhhhh', 'hhhhhhh', '.hhhhh.', '..hhh..', '...h...'];
 const Z_SMALL: Part = ['zzzz', '..z.', '.z..', 'zzzz'];
@@ -461,6 +482,41 @@ function bonked(fat: Fat, stars: [number, number][]): Frame {
   );
 }
 
+// На весу за шкирку анфас: кожа на загривке оттянута, лапы и хвост висят.
+const SCRUFF: Part = ['.kk.', 'kffk', 'kffk'];
+const HANG_HALF = [3, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4];
+// Передние лапы висят вдоль боков: наружный контур лапы — контур туловища.
+const HANG_FRONT: Part = ['kfk', 'kfk', 'kfk', 'kfk', 'kfk', 'klk', 'klk', '.k.'];
+const HANG_BACK: Part = ['kffk', 'kffk', 'kffk', 'kllk', '.kk.'];
+// Хвост висит прямо и не дёргается.
+const HANG_TAIL: Part = ['kffk', 'kddk', 'kffk', 'kffk', 'kddk', 'kffk', 'kffk', 'kddk', 'kffk', '.kk.'];
+
+/**
+ * Загривок в кадре `carried`, в клетках: за эту точку кошка висит на курсоре — середина кадра
+ * по x (между клетками 15 и 16) и середина верхнего ряда. Кадр симметричен, flip её не сдвигает.
+ */
+export const SCRUFF_AT: [number, number] = [16, 0.5];
+
+/** Несут за шкирку: голова сверху, туловище вытянуто, задние лапы (`sway` — разведены на пиксель) и хвост висят. */
+function carried(fat: Fat, eyes: Part, sway: boolean): Frame {
+  const body = frontBody(fat, HANG_HALF, false);
+  const half = body[0].length / 2;
+  const d = sway ? 1 : 0;
+  return compose(
+    [HANG_TAIL, 14, 22],
+    [HANG_BACK, 11 - d, 22],
+    [HANG_BACK, 17 + d, 22],
+    [body, 16 - half, 9],
+    [HANG_FRONT, 16 - half, 12],
+    [HANG_FRONT, 16 + half - 3, 12],
+    [SCRUFF, 14, 0],
+    [head(eyes), 10, 1],
+  );
+}
+
+/** Спит в лежаке: калачик на пиксель ниже — в подушке, — снизу закрыт передним бортиком. */
+const inBed = (f: Frame): Frame => compose([['.'.repeat(SIZE), ...f.slice(0, SIZE - 1)], 0, 0], [BED_FRONT, 1, SIZE - BED_FRONT.length]);
+
 export interface Anim {
   frames: Frame[];
   /** Сколько держится один кадр. */
@@ -469,6 +525,13 @@ export interface Anim {
 
 function build(fat: Fat) {
   const body = sideBody(fat);
+  const sleep: Anim = {
+    ms: 1500,
+    frames: [
+      sleeping(body, SLEEP_TAIL, [Z_SMALL, 25, 11]),
+      sleeping(inhale(body), SLEEP_TAIL_SWAY, [Z_BIG, 26, 6]),
+    ],
+  };
   return {
     stand: {
       ms: 500,
@@ -542,11 +605,15 @@ function build(fat: Fat) {
         sideLoaf(body, EYES_SHUT, FLOOR_TAIL),
       ],
     },
-    sleep: {
-      ms: 1500,
+    sleep,
+    bed: { ms: sleep.ms, frames: sleep.frames.map(inBed) },
+    carried: {
+      ms: 450,
       frames: [
-        sleeping(body, SLEEP_TAIL, [Z_SMALL, 25, 11]),
-        sleeping(inhale(body), SLEEP_TAIL_SWAY, [Z_BIG, 26, 6]),
+        carried(fat, EYES_OPEN, false),
+        carried(fat, EYES_OPEN, true),
+        carried(fat, EYES_OPEN, false),
+        carried(fat, EYES_SHUT, false),
       ],
     },
     faceplant: {
@@ -688,11 +755,20 @@ export function onBowl(frame: Frame, x: number, y: number): boolean {
   return BOWL_KEYS.has(frame[y]?.[x] ?? '.');
 }
 
-/** Маска для Rust: по числу на строку, бит x = в этой клетке нарисован зверь (не украшение). */
-export function hitMask(frame: Frame): number[] {
+/**
+ * Маска для Rust: по числу на строку, бит x = в этой клетке нарисован зверь (не украшение
+ * и не перед лежака). `through` — какие цвета пропускают клик насквозь.
+ */
+export function hitMask(frame: Frame, through: ReadonlySet<string> = THROUGH): number[] {
   return frame.map((row) => {
     let bits = 0;
-    for (let x = 0; x < SIZE; x++) if (row[x] !== '.' && !DECOR.has(row[x])) bits |= 1 << x;
+    for (let x = 0; x < SIZE; x++) if (row[x] !== '.' && !through.has(row[x])) bits |= 1 << x;
     return bits >>> 0;
   });
 }
+
+/** Кадр окна лежака. */
+export const bedFrame = (): Frame => compose([BED, 1, SIZE - BED.length]);
+
+/** Маска окна лежака: в нём сам лежак и кликабелен. */
+export const bedMask = (frame: Frame): number[] => hitMask(frame, DECOR);

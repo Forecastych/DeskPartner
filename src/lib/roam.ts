@@ -694,20 +694,113 @@ export function pickSpot(world: World, pet: Pet, kind: 'rest' | 'sleep', rnd: ()
 export const BOWL_INSET = 0.25;
 
 /**
- * Где стоит окно миски: пол основного монитора у правого угла, x — середина окна.
- * Кошка у миски стоит в той же точке: её окно ложится ровно на окно миски.
+ * Куда поставили миску или лежак: x — середина окна, y — его низ, физ. px. На рамке окна — ещё
+ * само окно и x − frame.left: окно двигают — вещь едет с ним, как кошка на насесте.
  */
-export function bowlAt(world: World): Goal | null {
-  const i = Math.max(world.monitors.findIndex((m) => m.primary), 0);
-  const m = world.monitors[i];
-  if (!m) return null;
-  return { surface: floorId(i), x: m.work.right - side(m) * (0.5 + BOWL_INSET) - EDGE_GAP };
+export type Place = { x: number; y: number; hwnd?: number | null; dx?: number };
+
+/** Где вещь стоит сейчас. Это и цель для кошки: она встаёт ровно в эту точку. */
+export interface Thing extends Goal {
+  y: number;
+  hwnd: number | null;
+  dx: number;
 }
 
-/** Стоит у миски: на полу под ней и не дальше пикселя. */
-export function atBowl(pet: Pet, world: World): boolean {
-  const b = bowlAt(world);
-  return b !== null && pet.move === 'still' && pet.on === b.surface && Math.abs(pet.x - b.x) < 1;
+/** Монитор под точкой, иначе ближайший к ней по прямой; мониторов нет — −1. */
+function nearest(world: World, x: number, y: number): number {
+  let best = -1;
+  let bestD = Infinity;
+  world.monitors.forEach((m, k) => {
+    const dx = Math.max(m.rect.left - x, 0, x - m.rect.right + 1);
+    const dy = Math.max(m.rect.top - y + 1, 0, y - m.rect.bottom);
+    const d = Math.hypot(dx, dy);
+    if (d < bestD) [best, bestD] = [k, d];
+  });
+  return best;
+}
+
+/**
+ * Поставить вещь на поверхность: x зажат в [left + lo, right − hi] — от левого края полспрайта,
+ * от правого `right` сторон спрайта, плюс EDGE_GAP. На узкой рамке вещь не помещается — null.
+ */
+function putOn(world: World, s: Surface, x: number, right: number): Thing | null {
+  const m = world.monitors[s.monitor];
+  const lo = s.left + side(m) / 2 + EDGE_GAP;
+  const hi = s.right - side(m) * right - EDGE_GAP;
+  if (s.kind === 'ledge' && lo > hi) return null;
+  const at = fit(x, lo, hi);
+  const fl = s.hwnd === undefined ? null : frameLeft(world, s.hwnd);
+  return { surface: s.id, x: at, y: s.y, hwnd: fl === null ? null : s.hwnd!, dx: fl === null ? 0 : at - fl };
+}
+
+/**
+ * Вещь в мире, который мог поменяться. Без места — `home` пола основного монитора.
+ * На рамке окна — едет за окном; рамки под ней больше нет (окно закрыли, свернули, загородили) — падает.
+ * Падает и брошенная: на ближайшую кромку окна под собой, где поместится, иначе на пол монитора.
+ * На полосы заголовков вещи не ставятся — они только поспать.
+ */
+function settle(world: World, at: Place | null, right: number, home: 'lo' | 'hi'): Thing | null {
+  const all = surfaces(world).filter((c) => !c.strip);
+  if (!at) {
+    const i = Math.max(world.monitors.findIndex((m) => m.primary), 0);
+    const f = world.monitors[i] && floorOf(all, i);
+    if (!f) return null;
+    return putOn(world, f, home === 'lo' ? -Infinity : Infinity, right);
+  }
+  let { x, y } = at;
+  if (at.hwnd != null) {
+    const fl = frameLeft(world, at.hwnd);
+    if (fl !== null) {
+      x = fl + (at.dx ?? 0);
+      const own = all.find((c) => c.hwnd === at.hwnd && covers(c, x));
+      const t = own && putOn(world, own, x, right);
+      if (t) return t;
+    }
+  }
+  const i = nearest(world, x, y);
+  const m = world.monitors[i];
+  if (!m) return null;
+  x = fit(x, m.work.left, m.work.right - 1);
+  let best: Thing | null = null;
+  for (const c of all) {
+    if (c.monitor !== i || c.y < y - 1 || !covers(c, x) || (best && c.y >= best.y)) continue;
+    best = putOn(world, c, x, right) ?? best;
+  }
+  return best ?? putOn(world, floorOf(all, i), x, right);
+}
+
+/**
+ * Где стоит окно миски: по умолчанию на полу основного монитора у правого угла; x — середина окна.
+ * Кошка у миски стоит в той же точке: её окно ложится ровно на окно миски.
+ */
+export const bowlAt = (world: World, at: Place | null = null): Thing | null => settle(world, at, 0.5 + BOWL_INSET, 'hi');
+
+/** Где стоит лежак: как миска, по умолчанию — у левого угла основного монитора. */
+export const bedAt = (world: World, at: Place | null = null): Thing | null => settle(world, at, 0.5, 'lo');
+
+/** Стоит в точке: на той же поверхности и не дальше пикселя. */
+const standsAt = (pet: Pet, g: Goal | null): boolean =>
+  g !== null && pet.move === 'still' && pet.on === g.surface && Math.abs(pet.x - g.x) < 1;
+
+/** Стоит у миски. */
+export const atBowl = (pet: Pet, world: World, at: Place | null = null): boolean => standsAt(pet, bowlAt(world, at));
+
+/** Стоит у лежака (в нём). */
+export const atBed = (pet: Pet, world: World, at: Place | null = null): boolean => standsAt(pet, bedAt(world, at));
+
+/**
+ * Кошку отпустили, пронеся над экраном: лапы в (x, y). Точку зажимает в work ближайшего монитора,
+ * чтобы она не висела за краем и не провалилась под панель задач, дальше падает на то, что под ней.
+ * Цель, уход за край и охота сброшены.
+ */
+export function release(pet: Pet, world: World, x: number, y: number): Pet {
+  const i = nearest(world, x, y);
+  const m = world.monitors[i];
+  if (!m) return spawn(world);
+  const h = side(m) / 2;
+  const p: Pet = { ...drop(pet, fit(x, m.work.left + h, m.work.right - h), fit(y, m.work.top + side(m), m.work.bottom)), goal: null, exit: 0 };
+  delete p.hunt;
+  return p;
 }
 
 // ── Охота за лазерной точкой ──────────────────────────────────────────────────────────────

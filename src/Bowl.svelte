@@ -2,21 +2,28 @@
   import { invoke } from '@tauri-apps/api/core';
   import { emitTo, listen } from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
-  import * as roam from './lib/roam';
+  import { Placer } from './lib/fall';
   import { bowlFrame, draw, hitMask, SIZE } from './lib/sprite';
 
-  /** Мониторы меняются редко: подключили второй, сдвинули панель задач. Раз в пару секунд хватает. */
-  const WORLD_MS = 2000;
-
-  /** Что пишет окно кошки: сколько корма насыпано. Голод и кормушку считает оно, миска только рисует. */
+  /**
+   * Что пишет окно кошки: сколько корма насыпано и где стоит миска (физ. px, как в place_pet).
+   * Голод, кормушку и место считает оно, миска только рисует и встаёт куда сказали.
+   */
   interface BowlState {
     portions: number;
+    x: number | null;
+    bottom: number | null;
+    /** Упала: бросили или рамку под ней убрали. */
+    fall: boolean;
   }
 
   let canvas: HTMLCanvasElement;
   let portions = 0;
-  let lastPlace = '';
   let lastMask = '';
+  const placer = new Placer(
+    (s) => void invoke('place_pet', { ...s }).catch(console.error),
+    () => window.devicePixelRatio,
+  );
 
   function render() {
     const frame = bowlFrame(portions);
@@ -27,40 +34,37 @@
     invoke('set_hit_mask', { rows: hitMask(frame) }).catch(console.error);
   }
 
-  /** Встать в угол основного монитора: низ окна — на пол, как и у кошки, что придёт есть. */
-  async function place() {
+  /**
+   * ЛКМ: потащили — миска переезжает, щёлкнули — насыпать. ПКМ — забрать порцию.
+   * Что из этого выйдет и куда миска упадёт, решает окно кошки.
+   */
+  async function poke(e: PointerEvent) {
+    if (e.button !== 0) return void emitTo('pet', 'bowl-click', { button: e.button }).catch(console.error);
+    let drop: { x: number; bottom: number } | null = null;
     try {
-      const world = await invoke<roam.World>('world');
-      const at = roam.bowlAt(world);
-      if (!at) return;
-      const floor = roam.surfaces(world).find((s) => s.id === at.surface)!;
-      const pos = { x: Math.round(at.x), bottom: Math.round(floor.y) };
-      const key = `${pos.x},${pos.bottom}`;
-      if (key === lastPlace) return;
-      lastPlace = key;
-      await invoke('place_pet', pos);
-    } catch (e) {
-      console.error(e);
+      placer.grab();
+      drop = await invoke<{ x: number; bottom: number } | null>('drag_window', { grab: null });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      placer.release(drop);
     }
-  }
-
-  // ЛКМ — насыпать, ПКМ — забрать порцию; что из этого выйдет, решает окно кошки
-  function poke(e: PointerEvent) {
-    emitTo('pet', 'bowl-click', { button: e.button }).catch(console.error);
+    if (drop) emitTo('pet', 'bowl-drop', drop).catch(console.error);
+    else emitTo('pet', 'bowl-click', { button: 0 }).catch(console.error);
   }
 
   onMount(() => {
     render();
-    place();
-    const id = setInterval(place, WORLD_MS);
     const unlisten = listen<BowlState>('bowl', (e) => {
       portions = e.payload.portions;
       render();
+      const { x, bottom, fall } = e.payload;
+      if (x !== null && bottom !== null) placer.go({ x, bottom }, fall);
     });
     // окно кошки могло открыться раньше и уже всё сказать — спросим ещё раз
     emitTo('pet', 'bowl-hello').catch(console.error);
     return () => {
-      clearInterval(id);
+      placer.stop();
       unlisten.then((off) => off());
     };
   });

@@ -115,6 +115,10 @@
       Кормушка
     </Check>
 
+    <Check bind:checked={settings.bed} hint="Лежак на полу — кошка чаще спит в нём. Его, как и миску, можно перетащить мышью." {disabled}>
+      Лежак
+    </Check>
+
     <Check bind:checked={settings.hideFromCapture} hint="Питомца не видно на скриншотах и стримах." {disabled}>
       Прятать от записи экрана
     </Check>

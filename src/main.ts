@@ -2,6 +2,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { mount, type Component } from 'svelte';
 import './app.css';
 import App from './App.svelte';
+import Bed from './Bed.svelte';
 import Bowl from './Bowl.svelte';
 import Laser from './Laser.svelte';
 import PetMenu from './PetMenu.svelte';
@@ -13,6 +14,7 @@ import Setup from './Setup.svelte';
 const views: Record<string, Component> = {
   pet: App,
   bowl: Bowl,
+  bed: Bed,
   setup: Setup,
   settings: Settings,
   menu: PetMenu,
