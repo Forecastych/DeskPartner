@@ -104,6 +104,8 @@
   /** Миска или лежак упали: окно вещи покажет падение, а не прыгнет на место. */
   let bowlFall = false;
   let bedFall = false;
+  /** Этот сон — в лежаке: пока спит, идёт к нему, куда бы его ни унесли. */
+  let bedBound = false;
   /** Окно настроек переносит папку данных: до перезапуска ничего не пишем, иначе запись уйдёт мимо переезда. */
   let frozen = false;
   let belly: Belly = fresh();
@@ -296,7 +298,20 @@
   function wander(kind: 'rest' | 'sleep') {
     if (!pet || !world || pet.move === 'out' || away() || pet.hunt) return;
     const bed = kind === 'sleep' && bedOn && Math.random() < BED_SLEEP ? roam.bedAt(world, bedPlace) : null;
+    bedBound = bed !== null;
     pet = roam.goTo(pet, world, bed ? { surface: bed.surface, x: bed.x } : roam.pickSpot(world, pet, kind, Math.random));
+  }
+
+  /**
+   * Уснула с мыслью о лежаке: лежак сдвинули, окно под ним уехало или пропало — идёт к нему заново,
+   * а не засыпает там, где цель потерялась. Лежак выключили — спит, где стоит.
+   */
+  function toBed() {
+    if (!pet || !world || pet.move === 'out' || away() || pet.hunt) return;
+    const b = bedOn ? roam.bedAt(world, bedPlace) : null;
+    if (!b) return void (bedBound = false);
+    if (roam.atBed(pet, world, bedPlace)) return;
+    if (pet.goal?.surface !== b.surface || pet.goal.x !== b.x) pet = roam.goTo(pet, world, { surface: b.surface, x: b.x });
   }
 
   /**
@@ -346,6 +361,9 @@
       if (roam.onStrip(pet) && pet.move === 'still' && sleepy.mood(nap) !== 'asleep') wander('rest');
       // голодная и бодрая — идёт к миске; спящую голод не будит
       if ((isHungry(belly) || mealPending) && sleepy.mood(nap) === 'awake') toBowl();
+      // разбудили — про лежак забыла до следующего сна
+      if (bedBound && sleepy.mood(nap) === 'asleep') toBed();
+      else bedBound = false;
     }
 
     if (event || mood || now - lastSave >= SAVE_MS) persist(now);
