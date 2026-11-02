@@ -6,7 +6,8 @@
 //! вызовом SetWindowPos с SWP_NOACTIVATE: show() из Tauri у уже созданного окна зовёт
 //! ShowWindow(SW_SHOW), а тот окно активирует.
 //! Фокуса нет — значит, ни Esc, ни клик мимо до окна не дойдут. Пока меню открыто, поток
-//! часто смотрит на кнопки мыши, Esc и активное окно (как hit.rs смотрит на курсор).
+//! часто смотрит на кнопки мыши, Esc и активное окно (как hit.rs смотрит на курсор), а Esc
+//! перехватывает esc.rs, чтобы он не ушёл ещё и активной программе.
 //!
 //! Показ в три шага: open_menu запоминает курсор и отдаёт пункты окну ("menu-items"), окно
 //! меряет себя и присылает размер (menu_size), а Rust ставит его у курсора в пределах рабочей
@@ -205,6 +206,8 @@ fn cancel(app: &AppHandle, gen: Option<u64>) {
 fn watch(app: AppHandle, gen: u64) {
     let Ok(me) = window(&app).and_then(|w| sys::hwnd(&w)) else { return };
     let spawned = thread::Builder::new().name("menu-watch".into()).spawn(move || {
+        // пока меню открыто, Esc закрывает его, а не что-то в активной программе
+        let mut trap = crate::esc::Trap::new();
         let mut was = sys::pressed();
         let fg = sys::foreground();
         loop {
@@ -225,7 +228,7 @@ fn watch(app: AppHandle, gen: u64) {
             };
             let click = fresh[..sys::ESC].contains(&true) && outside;
             let away = ![fg, me].contains(&sys::foreground());
-            if click || fresh[sys::ESC] || away {
+            if click || trap.pressed() || fresh[sys::ESC] || away {
                 cancel(&app, Some(gen));
                 break;
             }
@@ -248,7 +251,7 @@ fn place(at: (i32, i32), (w, h): (i32, i32), work: Rect) -> (i32, i32) {
 }
 
 #[cfg(windows)]
-mod sys {
+pub(crate) mod sys {
     use super::Rect;
     use std::mem::size_of;
     use std::ptr::null_mut;
@@ -356,7 +359,7 @@ mod sys {
 }
 
 #[cfg(not(windows))]
-mod sys {
+pub(crate) mod sys {
     use super::Rect;
     use tauri::WebviewWindow;
 

@@ -14,7 +14,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// Ключи состояния фронтенда: их файлы переезжают при смене папки.
-pub const KEYS: [&str; 7] = ["belly", "sleep", "stats", "spot", "settings", "bowl", "bed"];
+pub const KEYS: [&str; 8] = ["belly", "sleep", "stats", "spot", "settings", "bowl", "bed", "talk"];
 
 /// Имя папки и в %APPDATA%, и в предложениях. Не identifier из tauri.conf.json:
 /// app_config_dir() дал бы `%APPDATA%\io.github.deskpartner`, а человек ищет «DeskPartner».

@@ -3,9 +3,10 @@
   import { emitTo, listen } from '@tauri-apps/api/event';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { onMount } from 'svelte';
+  import * as chatter from './lib/chatter';
   import { feedBowl, fresh, isHungry, load, refill, save, step, takeOut, type Belly } from './lib/hunger';
   import * as roam from './lib/roam';
-  import { parse, serialize, type Settings } from './lib/settings';
+  import { parse, serialize, type Chatter, type Settings } from './lib/settings';
   import * as sleepy from './lib/sleep';
   import { ANIMS, BOWL_X, bowlLeft, draw, fatOn, flip, ground, hitMask, onBowl, SCRUFF_AT, SIZE, type AnimName, type Frame } from './lib/sprite';
   import { localLegacy, memoryStore, open, tauriBackend, type Store } from './lib/store';
@@ -54,6 +55,11 @@
   /** Ответ команды `senses`; здесь только то, что уже нужно. */
   interface Senses {
     idle: boolean;
+    typing: boolean;
+    session_secs: number;
+    active_today_secs: number;
+    /** Только в Windows: почему сейчас лучше не мешать; 'no' — можно. */
+    quiet?: string;
   }
 
   /** Копится за всю жизнь программы; питомец сбежал — цифры остаются. */
@@ -119,6 +125,15 @@
   let holding = false;
   /** Несут за шкирку: окно двигает Rust, мир кошку не трогает. */
   let carried = false;
+  /** Разговорчивость из настроек и что кошка уже наговорила. */
+  let chatterLevel: Chatter = 'sometimes';
+  let talk: chatter.Talk = chatter.fresh(Date.now(), chatterLevel, Math.random);
+  /** Облачко висит до этих пор; 0 — молчит. */
+  let speakingUntil = 0;
+  /** Последний ответ `senses`; null — Rust ещё не ответил. */
+  let senses: Senses | null = null;
+  /** Макушка кошки над серединой силуэта, физ. px: сюда облачко ставит хвостик. */
+  let head: { x: number; top: number } | null = null;
 
   let canvas: HTMLCanvasElement;
   let anim: AnimName | null = 'sit';
@@ -159,6 +174,7 @@
     store.set('belly', save(belly));
     store.set('sleep', sleepy.save(nap));
     store.set('stats', JSON.stringify(stats));
+    store.set('talk', chatter.save(talk));
     if (pet) store.set('spot', JSON.stringify(roam.spotOf(pet)));
     // окно-опору не храним: после перезапуска у окон другие hwnd — вещь найдёт рамку по точке
     if (bowlPlace) store.set('bowl', JSON.stringify({ x: Math.round(bowlPlace.x), y: Math.round(bowlPlace.y) }));
@@ -429,10 +445,74 @@
     if (anim === 'zzz') x = pet.exit < 0 ? m.work.left + half - Z_LEFT * cell : m.work.right + half - (Z_RIGHT + 1) * cell;
     const bottom = pet.y + (SIZE - 1 - (anim ? ground(anim) : SIZE - 1)) * cell;
     const at = { x: Math.round(x), bottom: Math.round(bottom) };
+    const was = head;
+    head = crown(at, cell);
+    if (speakingUntil && head && (head.x !== was?.x || head.top !== was?.top)) invoke('bubble_at', head).catch(console.error);
     const key = `${at.x},${at.bottom}`;
     if (key === lastPlace) return;
     lastPlace = key;
     invoke('place_pet', at).catch(console.error);
+  }
+
+  /** Голову ищем в верхних строках силуэта: миска у лап в кадре середину не сдвинет. */
+  const HEAD_ROWS = 8;
+
+  /**
+   * Макушка кошки в физ. px по окну с серединой `at.x` и низом `at.bottom`: над серединой
+   * нарисованных клеток в верхних HEAD_ROWS строках. Пустой кадр — головы нет.
+   */
+  function crown(at: { x: number; bottom: number }, cell: number): { x: number; top: number } | null {
+    const mask = hitMask(frame);
+    const top = mask.findIndex((bits) => bits !== 0);
+    if (top < 0) return null;
+    let lo = SIZE;
+    let hi = -1;
+    for (const bits of mask.slice(top, top + HEAD_ROWS)) {
+      for (let x = 0; x < SIZE; x++) {
+        if (!(bits & (1 << x))) continue;
+        lo = Math.min(lo, x);
+        hi = Math.max(hi, x);
+      }
+    }
+    return {
+      x: Math.round(at.x - (SIZE * cell) / 2 + ((lo + hi + 1) / 2) * cell),
+      top: Math.round(at.bottom - SIZE * cell + top * cell),
+    };
+  }
+
+  /** Кошке есть когда поговорить: дома, бодрая, стоит, ни с кем не занята. */
+  function free(): boolean {
+    return (
+      !!pet && !!world && !!anim && !carried && !holding && !pet.hunt && pet.move === 'still' && !away() && sleepy.mood(nap) === 'awake'
+    );
+  }
+
+  /** Облачко: убрать, когда пора или кошке стало не до него; сказать новое, когда chatter решит. */
+  function chat(now: number) {
+    if (speakingUntil) {
+      if (now >= speakingUntil || !free()) hush();
+      return;
+    }
+    if (frozen || !senses || !head) return;
+    const moment: chatter.Moment = {
+      now: new Date(now),
+      pause: !senses.idle && !senses.typing && (senses.quiet ?? 'no') === 'no',
+      session: senses.session_secs,
+      today: senses.active_today_secs,
+      hungry: isHungry(belly) && !mealPending,
+      free: free(),
+    };
+    const [next, line] = chatter.say(talk, moment, chatterLevel, Math.random);
+    talk = next;
+    if (!line) return;
+    speakingUntil = now + chatter.shownFor(line.text);
+    invoke('say', { text: line.text, ...head }).catch(console.error);
+    persist(now);
+  }
+
+  function hush() {
+    speakingUntil = 0;
+    invoke('hush').catch(console.error);
   }
 
   /** Перечитать мониторы и окна. Пустой список (экран блокировки) — мира нет, кошка ждёт на месте. */
@@ -526,6 +606,7 @@
     place();
     tellBowl();
     tellBed();
+    if (speakingUntil && !free()) hush();
   }
 
   /** У каждой анимации свой темп, поэтому таймер заводится заново на каждый кадр. */
@@ -568,6 +649,7 @@
     } else if (!disturb(now)) {
       pettedUntil = now + PETTED_MS;
       stats.petted++;
+      talk = chatter.liked(talk, now);
     }
     render();
   }
@@ -588,6 +670,10 @@
   function applySettings(s: Settings) {
     feederOn = s.feeder;
     bedOn = s.bed;
+    if (s.chatter !== chatterLevel) {
+      chatterLevel = s.chatter;
+      talk = chatter.retime(talk, chatterLevel, Date.now(), Math.random);
+    }
     invoke('set_capture_hidden', { hidden: s.hideFromCapture }).catch(console.error);
     tellBowl();
     tellBed();
@@ -627,12 +713,13 @@
     try {
       // До первого движения мыши трекер считает человека отошедшим, а сон липкий: без этого
       // кошка засыпала бы на NAP_MS прямо на старте. Скучать начинает, только увидев человека.
-      const { idle } = await invoke<Senses>('senses');
-      seenHuman ||= !idle;
-      humanIdle = seenHuman && idle;
+      senses = await invoke<Senses>('senses');
+      seenHuman ||= !senses.idle;
+      humanIdle = seenHuman && senses.idle;
     } catch (e) {
       console.error(e);
     }
+    chat(Date.now());
   }
 
   onMount(() => {
@@ -647,6 +734,8 @@
       const settings = parse(store.get('settings'));
       feederOn = settings.feeder;
       bedOn = settings.bed;
+      chatterLevel = settings.chatter;
+      talk = chatter.load(store.get('talk'), Date.now(), chatterLevel, Math.random);
       bowlPlace = loadPlace('bowl');
       bedPlace = loadPlace('bed');
       // Rust создаёт окна спрятанными от записи экрана; выключил человек галочку — показываемся
@@ -731,6 +820,12 @@
     const unlaserOff = win.listen('laser-off', () => {
       dot = null;
     });
+    // облачко смахнули кликом: окно уже спряталось само, кошка запоминает и болтает реже
+    const unshoo = win.listen('bubble-shoo', () => {
+      speakingUntil = 0;
+      talk = chatter.shoo(talk, chatterLevel, Math.random);
+      persist(Date.now());
+    });
     return () => {
       alive = false;
       persist(Date.now());
@@ -738,7 +833,7 @@
       clearInterval(moving);
       clearInterval(id);
       const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall];
-      for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, undrag, unlaser, unlaserOff]) off.then((f) => f());
+      for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, undrag, unlaser, unlaserOff, unshoo]) off.then((f) => f());
     };
   });
 </script>

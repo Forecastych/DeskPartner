@@ -4,6 +4,7 @@ import './app.css';
 import App from './App.svelte';
 import Bed from './Bed.svelte';
 import Bowl from './Bowl.svelte';
+import Bubble from './Bubble.svelte';
 import Laser from './Laser.svelte';
 import PetMenu from './PetMenu.svelte';
 import Push from './Push.svelte';
@@ -18,6 +19,7 @@ const views: Record<string, Component> = {
   setup: Setup,
   settings: Settings,
   menu: PetMenu,
+  bubble: Bubble,
   laser: Laser,
   push: Push,
 };

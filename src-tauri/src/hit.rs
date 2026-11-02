@@ -29,6 +29,11 @@ impl Masks {
         self.0.lock().unwrap().insert(label.to_owned(), rows);
     }
 
+    /// Маска текущего кадра окна; нет — окно её ещё не прислало.
+    pub fn rows(&self, label: &str) -> Option<Vec<u32>> {
+        self.0.lock().unwrap().get(label).cloned()
+    }
+
     fn contains(&self, label: &str, x: i64, y: i64) -> bool {
         if x < 0 || y < 0 || x >= SPRITE as i64 {
             return false;

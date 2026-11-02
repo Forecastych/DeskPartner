@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Окна питомца, миски, первого запуска, настроек, меню и лазера",
-  "windows": ["pet", "bowl", "bed", "setup", "settings", "menu", "laser", "push"],
+  "windows": ["pet", "bowl", "bed", "setup", "settings", "menu", "bubble", "laser", "push"],
   "permissions": ["core:default"]
 }

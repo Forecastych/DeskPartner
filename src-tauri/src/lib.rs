@@ -3,6 +3,8 @@
 //! человек не выбрал папку данных и не сохранил настройки (store.rs), питомца нет, есть только оно.
 //! "settings" — обычное окно настроек, открывается из трея и меню питомца.
 
+mod bubble;
+mod esc;
 mod hit;
 mod laser;
 mod menu;
@@ -31,7 +33,7 @@ const ZOOM: f64 = 4.0;
 const SPRITES: [&str; 3] = ["bed", "bowl", "pet"];
 
 /// Кого прячет галочка «Прятать от записи экрана». Точку лазера и её эффекты laser.rs прячет всегда сам.
-const CAPTURED: [&str; 4] = ["bed", "bowl", "pet", "menu"];
+const CAPTURED: [&str; 5] = ["bed", "bowl", "pet", "menu", "bubble"];
 
 /// Что питомец знает о человеке прямо сейчас.
 struct Senses {
@@ -137,8 +139,9 @@ fn open_sprites(app: &AppHandle) -> tauri::Result<()> {
     for label in SPRITES {
         hit::spawn(build_sprite_window(app, label)?, masks.clone());
     }
-    // меню и лазер строятся заранее и прячутся: по клику окно только показывают, без задержки
+    // меню, облачко и лазер строятся заранее и прячутся: по клику окно только показывают, без задержки
     menu::build(app)?;
+    bubble::build(app)?;
     laser::build(app)?;
     Ok(())
 }
@@ -218,11 +221,17 @@ async fn open_settings(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn move_data_dir(app: AppHandle, dir: String) -> Result<(), String> {
     store::set_data_dir(dir)?;
+    // новый процесс наследует окружение: по пометке он сразу откроет настройки, человек был в них
+    std::env::set_var(REOPEN_SETTINGS, "1");
     // не restart(): тот из главного потока выходит сразу, не ответив окну. request_restart
     // выходит обычным путём, и single-instance успевает отпустить мьютекс до нового запуска
     app.request_restart();
     Ok(())
 }
+
+/// Пометка «перезапустились из окна настроек — открыть его снова». Живёт в окружении
+/// процесса: аргументы командной строки request_restart передаёт прежние, добавить нечего.
+const REOPEN_SETTINGS: &str = "DESKPARTNER_REOPEN_SETTINGS";
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // кошка умеет уходить за край экрана — отсюда её зовут обратно
@@ -284,6 +293,10 @@ pub fn run() {
             menu::menu_size,
             menu::menu_pick,
             menu::close_menu,
+            bubble::say,
+            bubble::bubble_size,
+            bubble::bubble_at,
+            bubble::hush,
             laser::set_laser,
             laser::push_pixels,
             laser::push_show,
@@ -301,8 +314,14 @@ pub fn run() {
         .setup(move |app| {
             #[cfg(windows)]
             start_senses(feel);
+            // снимаем сразу: следующий перезапуск (или программа, которую питомец запустит) её не унаследует
+            let reopen = std::env::var_os(REOPEN_SETTINGS).is_some();
+            std::env::remove_var(REOPEN_SETTINGS);
             if store::set_up() {
                 open_sprites(app.handle())?;
+                if reopen {
+                    show_settings(app.handle())?;
+                }
             } else {
                 build_setup_window(app.handle())?;
             }

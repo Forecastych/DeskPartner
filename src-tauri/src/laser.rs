@@ -19,6 +19,7 @@
 //! обратно. На экране ничего не двигается по-настоящему. Снимок не пишется на диск и в лог,
 //! уходит только окну "push" и выбрасывается сразу после эффекта (а невостребованный — через [`SHOT_TTL`]).
 
+use crate::hit::SPRITE;
 use crate::world::Rect;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -153,6 +154,46 @@ pub fn area(x: i32, y: i32, side: i32, monitor: Rect) -> Rect {
     }
 }
 
+/// Спрайт на экране: левый верхний угол квадрата и сторона клетки арта, физ. пиксели.
+#[derive(Clone, Copy, Debug)]
+pub struct Sprite {
+    pub left: f64,
+    pub top: f64,
+    pub cell: f64,
+}
+
+/// Сделать прозрачными пиксели снимка `px` (RGBA, прямоугольник `shot`), которые задевает
+/// хоть одна нарисованная клетка спрайта, — маска `rows` как в hit.rs. Окно "push" лежит под
+/// кошкой и миской, и без этого их копия на снимке съезжала бы из-под настоящих: зверь двоится.
+/// Сквозь дыру видно сам экран, а настоящий спрайт и так лежит сверху.
+pub fn cut(px: &mut [u8], shot: Rect, s: Sprite, rows: &[u32]) {
+    let n = SPRITE as i64;
+    let width = (shot.right - shot.left) as usize;
+    let side = s.cell * SPRITE as f64;
+    // клетки, которые задевает отрезок экрана [p, p + 1)
+    let cells = |p: i32, origin: f64| {
+        let a = ((p as f64 - origin) / s.cell).floor() as i64;
+        let b = ((p as f64 + 1.0 - origin) / s.cell).ceil() as i64 - 1;
+        a.max(0)..=b.min(n - 1)
+    };
+    let y0 = (s.top.floor() as i32).max(shot.top);
+    let y1 = ((s.top + side).ceil() as i32).min(shot.bottom);
+    let x0 = (s.left.floor() as i32).max(shot.left);
+    let x1 = ((s.left + side).ceil() as i32).min(shot.right);
+    for y in y0..y1 {
+        let row = cells(y, s.top).fold(0u32, |acc, r| acc | rows.get(r as usize).copied().unwrap_or(0));
+        if row == 0 {
+            continue;
+        }
+        for x in x0..x1 {
+            if cells(x, s.left).any(|c| row >> c & 1 == 1) {
+                let i = ((y - shot.top) as usize * width + (x - shot.left) as usize) * 4;
+                px[i + 3] = 0;
+            }
+        }
+    }
+}
+
 /// Что окно "push" узнаёт о снимке до того, как забрать пиксели.
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -283,8 +324,9 @@ mod sys {
     use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_ESCAPE, VK_LCONTROL, VK_RCONTROL};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetClientRect, GetCursorPos, GetWindowRect, SetWindowDisplayAffinity, SetWindowPos, ShowWindowAsync, HWND_TOPMOST,
-        SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, WDA_EXCLUDEFROMCAPTURE,
+        GetClientRect, GetCursorPos, GetWindowDisplayAffinity, GetWindowRect, IsWindowVisible, SetWindowDisplayAffinity,
+        SetWindowPos, ShowWindowAsync, HWND_TOPMOST, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+        SWP_SHOWWINDOW, SW_HIDE, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
     };
 
     /// Окна как числа: HWND — сырой указатель, между потоками его так не передать.
@@ -293,6 +335,7 @@ mod sys {
         push: isize,
         /// Под кем лежит "push": под миской, а она под кошкой. Кошка спрятана от записи и в
         /// снимок не попадает — лёг бы снимок сверху, кошка пропала бы на полсекунды.
+        /// Не спрятана — её вырезает [`cut_visible`], иначе копия на снимке съезжала бы из-под неё.
         under: isize,
         /// Спрятать "push" от захвата не вышло (Windows старше 10 2004): снимок увидел бы
         /// сам себя, поэтому эффекта нет совсем. Точку это не трогает.
@@ -489,13 +532,50 @@ mod sys {
         }
     }
 
+    /// Вырезать из снимка кошку и миску, если они на него попали: «прятать от записи» выключено.
+    /// Лежак не трогаем — он под окном "push", тот его просто накрывает.
+    fn cut_visible(app: &AppHandle, px: &mut [u8], shot: Rect) {
+        let masks = tauri::Manager::state::<std::sync::Arc<crate::hit::Masks>>(app);
+        for label in ["bowl", "pet"] {
+            let Some(w) = tauri::Manager::get_webview_window(app, label) else { continue };
+            let Ok(h) = hwnd(&w) else { continue };
+            let Some(rows) = masks.rows(label) else { continue };
+            // SAFETY: только читают атрибуты и геометрию нашего окна в свои переменные.
+            let sprite = unsafe {
+                let mut affinity = 0u32;
+                if IsWindowVisible(h as HWND) == 0
+                    || GetWindowDisplayAffinity(h as HWND, &mut affinity) == 0
+                    || affinity != WDA_NONE
+                {
+                    continue;
+                }
+                let mut cr: RECT = zeroed();
+                let mut o = POINT { x: 0, y: 0 };
+                if GetClientRect(h as HWND, &mut cr) == 0 || ClientToScreen(h as HWND, &mut o) == 0 {
+                    continue;
+                }
+                // спрайт — квадрат по центру окна, как в hit.rs: окно бывает шире заказанного
+                let side = cr.right.min(cr.bottom) as f64;
+                Sprite {
+                    left: o.x as f64 + (cr.right as f64 - side) / 2.0,
+                    top: o.y as f64 + (cr.bottom as f64 - side) / 2.0,
+                    cell: side / SPRITE as f64,
+                }
+            };
+            if sprite.cell > 0.0 {
+                cut(px, shot, sprite, &rows);
+            }
+        }
+    }
+
     /// Снять место разворота и позвать окно "push". Идёт в своём потоке: BitBlt с экрана
     /// занимает до десятков миллисекунд, точка за курсором за это время не должна замирать.
     fn skid(app: AppHandle, turn: Turn) {
         let (tx, ty) = (turn.x.round() as i32, turn.y.round() as i32);
         let (mon, scale) = monitor(tx, ty);
         let r = area(tx, ty, (AREA * scale).round() as i32, mon);
-        let Some(pixels) = grab(r) else { return };
+        let Some(mut pixels) = grab(r) else { return };
+        cut_visible(&app, &mut pixels, r);
         let open = [
             r.left == mon.left && !on_screen(r.left - 1, ty),
             r.top == mon.top && !on_screen(tx, r.top - 1),
@@ -538,6 +618,8 @@ mod sys {
         let mut on = false;
         let mut quiet = false;
         let mut was_sticky = false;
+        // пока указка включена из меню, Esc гасит её, а не что-то в активной программе
+        let mut trap: Option<crate::esc::Trap> = None;
         // счётчик нажатий raw input на прошлом опросе: сдвинулся при зажатом Ctrl — было что-то ещё
         let mut presses = win::presses();
         let mut last: Option<(i32, i32)> = None;
@@ -580,7 +662,8 @@ mod sys {
                 // только что включили из меню: сбросить у Esc «нажат с прошлого раза»,
                 // иначе давнее нажатие погасило бы указку сразу
                 let _ = esc();
-            } else if sticky && esc() {
+                trap = Some(crate::esc::Trap::new());
+            } else if sticky && (trap.as_mut().is_some_and(|t| t.pressed()) || esc()) {
                 STICKY.store(false, Ordering::Relaxed);
             }
             let mut want = held || STICKY.load(Ordering::Relaxed);
@@ -594,6 +677,9 @@ mod sys {
                 want = false;
             }
             was_sticky = STICKY.load(Ordering::Relaxed);
+            if !was_sticky {
+                trap = None;
+            }
 
             if want != on {
                 on = want;
@@ -639,6 +725,40 @@ mod tests {
 
     fn ms(t0: Instant, n: u64) -> Instant {
         t0 + Duration::from_millis(n)
+    }
+
+    /// Какие пиксели снимка прозрачны, построчно: '#' — вырезан, '.' — остался.
+    fn holes(px: &[u8], w: usize) -> Vec<String> {
+        px.chunks_exact(4).map(|c| if c[3] == 0 { '#' } else { '.' }).collect::<Vec<_>>().chunks(w).map(|r| r.iter().collect()).collect()
+    }
+
+    #[test]
+    fn cut_removes_drawn_cells_and_their_fringe() {
+        // снимок 6×4 с углом в (100, 200); спрайт с клеткой 2.5 px начинается в (99, 201):
+        // клетка (0, 0) — x 99..101.5, y 201..203.5; клетка (1, 1) — x 101.5..104, y 203.5..206
+        let shot = Rect { left: 100, top: 200, right: 106, bottom: 204 };
+        let mut px = vec![255u8; 6 * 4 * 4];
+        let mut rows = vec![0u32; SPRITE as usize];
+        rows[0] = 0b01;
+        rows[1] = 0b10;
+        cut(&mut px, shot, Sprite { left: 99.0, top: 201.0, cell: 2.5 }, &rows);
+        assert_eq!(
+            holes(&px, 6),
+            [
+                "......", // y 200 — выше спрайта
+                "##....", // y 201, 202 — клетка (0, 0): x 100 и 101, задетый наполовину
+                "##....",
+                "####..", // y 203 задевает обе строки клеток: (0, 0) по x 100..102 и (1, 1) по x 101..104
+            ]
+        );
+    }
+
+    #[test]
+    fn cut_outside_the_shot_changes_nothing() {
+        let shot = Rect { left: 0, top: 0, right: 4, bottom: 4 };
+        let mut px = vec![255u8; 4 * 4 * 4];
+        cut(&mut px, shot, Sprite { left: 500.0, top: 500.0, cell: 4.0 }, &[u32::MAX; 32]);
+        assert!(px.iter().all(|&b| b == 255));
     }
 
     #[test]
