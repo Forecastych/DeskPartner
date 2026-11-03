@@ -1,6 +1,6 @@
 [package]
 name = "deskpartner"
-version = "0.0.4"
+version = "0.0.5"
 description = "Пиксельный питомец, который живёт на краях экрана и рамках окон"
 authors = ["Forecastych"]
 license = "PolyForm-Noncommercial-1.0.0"
