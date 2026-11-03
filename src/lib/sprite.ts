@@ -20,6 +20,7 @@ export const PALETTE: Record<string, string> = {
   h: '#e2556b', // сердечко
   z: '#bcd4ff', // «з-з-з» во сне
   s: '#ffd34d', // звёздочки, когда врезалась
+  u: '#d9d3c5', // пыль из-под лап на заносе
   B: '#26324a', // контур миски — свой, чтобы клик по миске отличался от клика по кошке
   b: '#5b8fd9', // миска
   c: '#c98d4b', // корм
@@ -27,6 +28,8 @@ export const PALETTE: Record<string, string> = {
   R: '#5a3a2e', // контур лежака
   r: '#b5654a', // лежак
   q: '#f0dcb8', // подушка в лежаке
+  m: '#8d8478', // мышь
+  n: '#6e665b', // мышь потемнее, у хвоста
 };
 
 /** Миска и корм в ней: клик сюда кормит, а не гладит. */
@@ -337,6 +340,10 @@ const behindEdge = (z: Part, x: number, y: number): Frame => compose([z, x, y]);
 const raisedPaw = (y: number): Part => ['.kk.', 'kllk', 'kllk', ...Array<string>(23 - y - 2).fill('kffk')];
 const TONGUE: Part = ['pp'];
 
+// Облизывается после погони: язык ходит по губам от одного уголка рта к другому.
+const LICK_LEFT: [Part, number, number][] = [[['p'], 13, 20], [['p'], 14, 21]];
+const LICK_RIGHT: [Part, number, number][] = [[['p'], 18, 20], [['p'], 17, 21]];
+
 function grooming(fat: Fat, eyes: Part, pawY: number, tongue: boolean): Frame {
   const body = frontBody(fat, SIT_HALF, 'right');
   const half = body[0].length / 2;
@@ -470,6 +477,29 @@ function crouching(fat: Fat, wiggle: boolean): Frame {
 
 const STAR: Part = ['.s.', 'sss', '.s.'];
 
+// Пыль из-под передних лап на заносе: клубок то поменьше, то побольше.
+const DUST_SMALL: Part = ['.u.', 'uuu'];
+const DUST_BIG: Part = ['..u..', '.uuu.', 'uuuuu'];
+
+/**
+ * Занос на развороте: туловище осело на ряд, передние лапы упёрты вперёд наискось, голова
+ * откинута назад, уши прижаты, хвост рулём; перед лапами клубится пыль.
+ */
+function skidding(fat: Fat, big: boolean): Frame {
+  const len = 5 - fat;
+  const legs = [...BACK, ...FRONT].map((x, i): [Part, number, number] =>
+    i < 2 ? [leg(len), x, 27 + fat] : [slantLeg(len, 1)[0], x, 27 + fat],
+  );
+  const toe = FRONT[1] + len + 3;
+  return compose(
+    [TAIL_BACK, 0, 20],
+    [sideBody(fat), 4, 20],
+    ...legs,
+    [head(EYES_OPEN, HEAD_BOTTOM, HEAD_FLAT), HEAD_AT[0] - 1, HEAD_AT[1] + 1],
+    big ? [DUST_BIG, toe, SIZE - 3] : [DUST_SMALL, toe + 1, SIZE - 2],
+  );
+}
+
 /** Врезалась в край окна: отпрянула на пиксель, уши прижаты, глаза зажмурены, хвост ёршиком, над головой звёздочки. */
 function bonked(fat: Fat, stars: [number, number][]): Frame {
   const legs = [...BACK, ...FRONT].map((x): [Part, number, number] => [leg(6 - fat), x, 26 + fat]);
@@ -563,6 +593,11 @@ function build(fat: Fat) {
     crouch: {
       ms: 220,
       frames: [crouching(fat, false), crouching(fat, true)],
+    },
+    // занос: держится, пока едет по инерции (SKID_MS), пыль клубится
+    skid: {
+      ms: 100,
+      frames: [skidding(fat, false), skidding(fat, true)],
     },
     bonk: {
       ms: 200,
@@ -682,6 +717,15 @@ function build(fat: Fat) {
         angry(fat, true, HEAD_BOTTOM, TAIL_PUFF_SWAY),
       ],
     },
+    lick: {
+      ms: 180,
+      frames: [
+        sitting(fat, EYES_HAPPY, SIT_TAIL, LICK_LEFT),
+        sitting(fat, EYES_HAPPY, SIT_TAIL, [[TONGUE, 15, 21]]),
+        sitting(fat, EYES_HAPPY, SIT_TAIL, LICK_RIGHT),
+        sitting(fat, EYES_HAPPY, SIT_TAIL, [[TONGUE, 15, 21]]),
+      ],
+    },
     zzz: {
       ms: 1100,
       frames: [
@@ -766,6 +810,36 @@ export function hitMask(frame: Frame, through: ReadonlySet<string> = THROUGH): n
     return bits >>> 0;
   });
 }
+
+// Мышь, за которой гоняется кошка: маленькая, у самого пола, смотрит вправо, хвост слева.
+const MOUSE: Part = [
+  '...........kk.....',
+  '..........kppk....',
+  '......kkkkkppk....',
+  '....kkmmmmmkkmk...',
+  '...kmmmmmmmmmmmk..',
+  '..kmmmmmmmmmkmmmk.',
+  '..kmmmmmmmmmmmmmpk',
+  '..knmmmmmmlllllkk.',
+  '...kkkkkkkkkkkkk..',
+];
+/** Сидит и принюхивается: нос на пиксель выше. */
+const MOUSE_SNIFF: Part = MOUSE.map((r, y) => (y === 5 ? '..kmmmmmmmmmkmmmpk' : y === 6 ? '..kmmmmmmmmmmmmmk.' : r));
+
+/** Мышь бежит: тело подпрыгивает, лапки и хвост через кадр. */
+const mouseRun = (up: boolean): Frame =>
+  up
+    ? compose([['pp...', '.ppp.', '....p'], 4, 24], [MOUSE, 8, 22], [['..kk......kk'], 8, 31])
+    : compose([['p....', '.pp..', '...pp'], 4, 25], [MOUSE, 8, 23], [['....kk..kk'], 8, 31]);
+
+/** Мышь сидит: тело на полу, хвост лежит. */
+const mouseSit = (body: Part): Frame => compose([['p...', '.pp.', '...p'], 5, 28], [body, 8, 23]);
+
+/** Позы мыши; кликов она не ловит — маска у её окна всегда пустая. */
+export const MOUSE_ANIMS = {
+  run: { ms: 90, frames: [mouseRun(true), mouseRun(false)] },
+  sit: { ms: 400, frames: [mouseSit(MOUSE), mouseSit(MOUSE_SNIFF), mouseSit(MOUSE), mouseSit(MOUSE)] },
+} satisfies Record<string, Anim>;
 
 /** Кадр окна лежака. */
 export const bedFrame = (): Frame => compose([BED, 1, SIZE - BED.length]);

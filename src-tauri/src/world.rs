@@ -102,6 +102,51 @@ pub fn strips(windows: &[Win]) -> Vec<Ledge> {
     out
 }
 
+/// Дочернее окно внутри обычного: панель, список, поле ввода. Его верх — внутренняя рамка.
+#[derive(Clone, Copy, Debug)]
+pub struct Child {
+    pub hwnd: i64,
+    pub rect: Rect,
+}
+
+/// Уже этого внутренняя рамка — кнопка или поле: мыши там бегать негде.
+const SHELF_MIN: i32 = 120;
+/// Рамка у самого верха или низа окна — это край окна, а не что-то внутри.
+const SHELF_EDGE: i32 = 4;
+/// Полок с одного окна, самых широких: у проводника дочерних окон десятки.
+const SHELVES_PER_WINDOW: usize = 6;
+/// У скольких верхних окон искать полки: перечислять детей у всех подряд дорого.
+const SHELF_WINDOWS: usize = 12;
+
+/// Полки для погони за мышью: у окна `windows[i]` верх каждого достаточно широкого дочернего
+/// окна из `kids`, обрезанный рамкой окна и окнами выше. Порядок — по z-order окон.
+pub fn shelves_of(windows: &[Win], kids: &[(usize, Vec<Child>)]) -> Vec<Ledge> {
+    let mut out = Vec::new();
+    for (i, children) in kids {
+        let Some(w) = windows.get(*i) else { continue };
+        let f = w.frame;
+        let mut mine: Vec<Ledge> = Vec::new();
+        for c in children {
+            let y = c.rect.top;
+            if y <= f.top + SHELF_EDGE || y >= f.bottom - SHELF_EDGE {
+                continue;
+            }
+            let span = (c.rect.left.max(f.left), c.rect.right.min(f.right));
+            let frame = Rect { left: span.0, top: y, right: span.1, bottom: c.rect.bottom.min(f.bottom) };
+            for (left, right) in uncovered(&windows[..*i], y, span) {
+                if right - left >= SHELF_MIN && !mine.iter().any(|l| (l.y, l.left, l.right) == (y, left, right)) {
+                    mine.push(Ledge { hwnd: c.hwnd, y, left, right, frame });
+                }
+            }
+        }
+        // устойчиво: при равной ширине остаётся тот, что раньше в списке детей
+        mine.sort_by_key(|l| -(l.right - l.left));
+        mine.truncate(SHELVES_PER_WINDOW);
+        out.extend(mine);
+    }
+    out
+}
+
 /// Куски отрезка `span` строки `y`, не закрытые окнами `above`.
 fn uncovered(above: &[Win], y: i32, span: (i32, i32)) -> Vec<(i32, i32)> {
     let mut open: Vec<_> = [span].into_iter().filter(|&(l, r)| r - l >= 1).collect();
@@ -129,6 +174,21 @@ pub fn world() -> World {
     World { monitors: sys::monitors(), ledges: ledges(&windows), active, strips: strips(&windows) }
 }
 
+/// Внутренние рамки окон для погони за мышью (см. [`shelves_of`]). Только прямоугольники
+/// и стили дочерних окон: что в окнах написано, не читаем.
+#[tauri::command]
+pub fn shelves() -> Vec<Ledge> {
+    let windows = sys::windows();
+    let kids: Vec<_> = windows
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| w.perch || w.strip.is_some())
+        .take(SHELF_WINDOWS)
+        .map(|(i, w)| (i, sys::children(w.hwnd)))
+        .collect();
+    shelves_of(&windows, &kids)
+}
+
 /// Ставит окно, которое позвало команду, так, чтобы середина его внутренней области была
 /// на `x`, а нижний край — на `bottom` (физ. пиксели). Зовут и питомец, и миска: имя осталось
 /// с тех времён, когда окно было одно. За край экрана уводить можно: так кошка уходит.
@@ -149,7 +209,7 @@ pub fn place_pet(window: WebviewWindow, x: i32, bottom: i32) -> Result<(), Strin
 
 #[cfg(windows)]
 mod sys {
-    use super::{Monitor, Rect, Win};
+    use super::{Child, Monitor, Rect, Win};
     use std::ffi::c_void;
     use std::mem::size_of;
     use std::ptr::{null, null_mut};
@@ -160,7 +220,7 @@ mod sys {
     use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
     use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect,
+        EnumChildWindows, EnumWindows, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect,
         GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER,
         MONITORINFOF_PRIMARY, WS_CHILD, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
     };
@@ -238,6 +298,32 @@ mod sys {
         Some(Win { hwnd: h as isize as i64, frame, perch: normal && !zoomed, strip })
     }
 
+    /// Видимые дочерние окна `hwnd` на любой глубине: только прямоугольник, без текста.
+    pub fn children(hwnd: i64) -> Vec<Child> {
+        unsafe extern "system" fn each(h: HWND, data: LPARAM) -> BOOL {
+            (*(data as *mut Vec<HWND>)).push(h);
+            1
+        }
+        let mut all: Vec<HWND> = Vec::new();
+        // SAFETY: колбэк зовётся синхронно, пока `all` жив; окно могли закрыть — тогда детей просто нет.
+        unsafe { EnumChildWindows(hwnd as isize as HWND, Some(each), &mut all as *mut _ as LPARAM) };
+        all.into_iter()
+            .filter_map(|h| unsafe {
+                // IsWindowVisible смотрит и на родителей: спрятанная вкладка не в счёт
+                let style = GetWindowLongW(h, GWL_STYLE) as u32;
+                let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+                if IsWindowVisible(h) == 0 || style & WS_CHILD == 0 || ex & WS_EX_TRANSPARENT != 0 {
+                    return None;
+                }
+                let mut r: RECT = std::mem::zeroed();
+                if GetWindowRect(h, &mut r) == 0 || r.right <= r.left || r.bottom <= r.top {
+                    return None;
+                }
+                Some(Child { hwnd: h as isize as i64, rect: r.into() })
+            })
+            .collect()
+    }
+
     /// Корень окна на переднем плане. Рабочий стол и панели задач — не «окно, где работают».
     pub fn active() -> Option<i64> {
         // SAFETY: только чтение по дескриптору; окно могло исчезнуть — тогда вызовы не удадутся
@@ -312,7 +398,7 @@ mod sys {
 
 #[cfg(not(windows))]
 mod sys {
-    use super::{Monitor, Win};
+    use super::{Child, Monitor, Win};
 
     pub fn monitors() -> Vec<Monitor> {
         Vec::new()
@@ -322,6 +408,9 @@ mod sys {
     }
     pub fn active() -> Option<i64> {
         None
+    }
+    pub fn children(_: i64) -> Vec<Child> {
+        Vec::new()
     }
 }
 
@@ -354,6 +443,50 @@ mod tests {
     /// Куски кромок как (hwnd, left, right) — y и frame проверяются отдельно.
     fn spans(ws: &[Win]) -> Vec<(i64, i32, i32)> {
         ledges(ws).into_iter().map(|l| (l.hwnd, l.left, l.right)).collect()
+    }
+
+    fn child(hwnd: i64, rect: Rect) -> Child {
+        Child { hwnd, rect }
+    }
+
+    #[test]
+    fn shelf_is_top_of_child_clipped_by_parent() {
+        let ws = [perch(1, rect(100, 100, 900, 700))];
+        let s = shelves_of(&ws, &[(0, vec![child(11, rect(50, 300, 600, 650))])]);
+        assert_eq!(s, vec![Ledge { hwnd: 11, y: 300, left: 100, right: 600, frame: rect(100, 300, 600, 650) }]);
+    }
+
+    #[test]
+    fn narrow_and_edge_children_give_no_shelf() {
+        let ws = [perch(1, rect(100, 100, 900, 700))];
+        let kids = vec![
+            child(11, rect(200, 300, 300, 400)), // кнопка: уже SHELF_MIN
+            child(12, rect(100, 102, 900, 700)), // клиентская область у самого верха окна
+            child(13, rect(100, 698, 900, 760)), // у самого низа
+            child(14, rect(100, 800, 900, 900)), // ниже окна
+        ];
+        assert!(shelves_of(&ws, &[(0, kids)]).is_empty());
+    }
+
+    #[test]
+    fn window_above_cuts_shelf() {
+        let ws = [cover(2, rect(300, 250, 500, 400)), perch(1, rect(100, 100, 900, 700))];
+        let s = shelves_of(&ws, &[(1, vec![child(11, rect(100, 300, 900, 650))])]);
+        let spans: Vec<_> = s.iter().map(|l| (l.hwnd, l.left, l.right)).collect();
+        assert_eq!(spans, vec![(11, 500, 900), (11, 100, 300)]);
+    }
+
+    #[test]
+    fn shelves_per_window_widest_and_deduped() {
+        let ws = [perch(1, rect(0, 0, 2000, 1000))];
+        let mut kids: Vec<_> = (0..10).map(|k| child(10 + k, rect(0, 100 + 50 * k as i32, 200 + 100 * k as i32, 900))).collect();
+        // тот же кусок у вложенного окна — одна полка
+        kids.push(child(99, rect(0, 550, 1100, 900)));
+        let s = shelves_of(&ws, &[(0, kids)]);
+        assert_eq!(s.len(), SHELVES_PER_WINDOW);
+        assert_eq!(s[0].right, 1100);
+        assert_eq!(s[0].hwnd, 19);
+        assert!(s.windows(2).all(|p| p[0].right - p[0].left >= p[1].right - p[1].left));
     }
 
     #[test]

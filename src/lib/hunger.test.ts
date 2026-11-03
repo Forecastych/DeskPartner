@@ -14,6 +14,7 @@ import {
   refill,
   RUN_AWAY_MS,
   save,
+  starve,
   step,
   takeOut,
 } from './hunger';
@@ -208,6 +209,28 @@ describe('побег', () => {
     expect(events).not.toContain('gone');
     expect(b.gone).toBe(false);
     expect(b.sinceHuman).toBe(DAY);
+  });
+});
+
+describe('starve', () => {
+  it('сытую делает голодной ровно на пороге: следующий шаг не уводит её искать еду', () => {
+    const b = starve(fed());
+    expect(isHungry(b)).toBe(true);
+    expect(b.sinceMeal).toBe(HUNGRY_AFTER_MS);
+    expect(step(b, MAX_STEP_MS)[1]).toBeNull();
+  });
+
+  it('с запасом в кормушке сразу ест из неё', () => {
+    expect(step(starve({ ...fed(), feeder: 2 }), 1)[1]).toBe('eat');
+  });
+
+  it('голодную, бродящую и ушедшую не трогает', () => {
+    const hungry = { ...fed(), sinceMeal: HUNGRY_AFTER_MS + 5 };
+    for (const b of [hungry, { ...fed(), away: 1000 }, { ...fed(), gone: true }]) expect(starve(b)).toBe(b);
+  });
+
+  it('счётчик человека не трогает', () => {
+    expect(starve({ ...fed(), sinceHuman: 1234 }).sinceHuman).toBe(1234);
   });
 });
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   // Поля настроек — одни и те же в мастере первого запуска (по шагу на part) и в окне настроек.
   // Вид — из src/ui; здесь только раскладка.
-  import { CHATTER, MODES, TOPICS, type Chatter, type Mode, type Settings, type Topic } from './lib/settings';
+  import { CHATTER, HUNTER_AREAS, MODES, TOPICS, type Chatter, type HunterArea, type Mode, type Settings, type Topic } from './lib/settings';
   import { Check, Group, Hint, Radio, TextInput } from './ui';
 
   interface Props {
@@ -18,6 +18,10 @@
   const MODE_TEXT: Record<Mode, [string, string]> = {
     calm: ['Спокойный', 'живёт рядом и не мешает'],
     pranks: ['Шалости', 'иногда тянет курсор, только когда мышь стоит'],
+  };
+  const AREA_TEXT: Record<HunterArea, [string, string]> = {
+    taskbar: ['Нижняя панель', 'мышь бегает по панели задач'],
+    screen: ['Весь экран', 'мышь забегает на окна и прячется в них'],
   };
   const CHATTER_TEXT: Record<Chatter, [string, string]> = {
     quiet: ['Молчун', 'сам не заговаривает'],
@@ -122,6 +126,24 @@
     <Check bind:checked={settings.hideFromCapture} hint="Питомца не видно на скриншотах и стримах." {disabled}>
       Прятать от записи экрана
     </Check>
+
+    <Check
+      bind:checked={settings.hunter}
+      hint="Иногда по экрану пробегает мышь, кошка гонится за ней 2–4 минуты; на резких разворотах её заносит. Мышь всегда убегает."
+      {disabled}
+    >
+      Охотник
+    </Check>
+
+    {#if settings.hunter}
+      <div class="sub">
+        {#each HUNTER_AREAS as a}
+          <Radio name="hunterArea" value={a} bind:group={settings.hunterArea} hint={AREA_TEXT[a][1]} {disabled}>
+            {AREA_TEXT[a][0]}
+          </Radio>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <Group legend="Режим">

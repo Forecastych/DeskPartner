@@ -6,6 +6,7 @@ import Bed from './Bed.svelte';
 import Bowl from './Bowl.svelte';
 import Bubble from './Bubble.svelte';
 import Laser from './Laser.svelte';
+import Mouse from './Mouse.svelte';
 import PetMenu from './PetMenu.svelte';
 import Push from './Push.svelte';
 import Settings from './Settings.svelte';
@@ -22,6 +23,7 @@ const views: Record<string, Component> = {
   bubble: Bubble,
   laser: Laser,
   push: Push,
+  mouse: Mouse,
 };
 
 export default mount(views[getCurrentWindow().label] ?? App, { target: document.getElementById('app')! });

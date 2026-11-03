@@ -11,6 +11,10 @@ export type Mode = (typeof MODES)[number];
 export const CHATTER = ['quiet', 'sometimes', 'often'] as const;
 export type Chatter = (typeof CHATTER)[number];
 
+/** Где охотник гоняется за курсором: только по панели задач или по всему экрану. */
+export const HUNTER_AREAS = ['taskbar', 'screen'] as const;
+export type HunterArea = (typeof HUNTER_AREAS)[number];
+
 export interface Settings {
   /** Кормушка: насыпал порций — кошка ест сама, когда проголодается. */
   feeder: boolean;
@@ -18,6 +22,9 @@ export interface Settings {
   bed: boolean;
   /** Не попадать в скриншоты и запись экрана (WDA_EXCLUDEFROMCAPTURE). */
   hideFromCapture: boolean;
+  /** «Охотник»: кошка гоняется за курсором, как за лазером, только без Ctrl. */
+  hunter: boolean;
+  hunterArea: HunterArea;
   /** Пока только кошка; собака и дракон позже. */
   pet: 'cat';
   topics: Topic[];
@@ -38,6 +45,8 @@ export function defaults(): Settings {
     feeder: false,
     bed: false,
     hideFromCapture: true,
+    hunter: false,
+    hunterArea: 'taskbar',
     pet: 'cat',
     topics: [],
     mode: 'calm',
@@ -71,6 +80,8 @@ export function parse(raw: string | null): Settings {
     feeder: bool(s.feeder, d.feeder),
     bed: bool(s.bed, d.bed),
     hideFromCapture: bool(s.hideFromCapture, d.hideFromCapture),
+    hunter: bool(s.hunter, d.hunter),
+    hunterArea: oneOf(HUNTER_AREAS, s.hunterArea, d.hunterArea),
     pet: 'cat',
     topics: Array.isArray(s.topics) ? TOPICS.filter((t) => (s.topics as unknown[]).includes(t)) : d.topics,
     mode: oneOf(MODES, s.mode, d.mode),

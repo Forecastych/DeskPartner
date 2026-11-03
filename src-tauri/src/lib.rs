@@ -29,11 +29,11 @@ const ZOOM: f64 = 4.0;
 
 /// Окна-спрайты на рабочем столе. Порядок — это порядок по глубине: построенное позже
 /// ложится сверху, и кошка, что пришла есть, должна быть перед миской, а не под горкой корма,
-/// а лежак — под всеми: кошка в нём, а не за ним.
-const SPRITES: [&str; 3] = ["bed", "bowl", "pet"];
+/// а лежак — под всеми: кошка в нём, а не за ним. Мышь — под кошкой: та её догоняет и перекрывает.
+const SPRITES: [&str; 4] = ["bed", "bowl", "mouse", "pet"];
 
 /// Кого прячет галочка «Прятать от записи экрана». Точку лазера и её эффекты laser.rs прячет всегда сам.
-const CAPTURED: [&str; 5] = ["bed", "bowl", "pet", "menu", "bubble"];
+const CAPTURED: [&str; 6] = ["bed", "bowl", "mouse", "pet", "menu", "bubble"];
 
 /// Что питомец знает о человеке прямо сейчас.
 struct Senses {
@@ -133,7 +133,7 @@ fn build_sprite_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWin
     b.build()
 }
 
-/// Питомец, миска и лежак, у каждого свой поток прозрачности для кликов.
+/// Питомец, миска, лежак и мышь, у каждого свой поток прозрачности для кликов.
 fn open_sprites(app: &AppHandle) -> tauri::Result<()> {
     let masks = app.state::<Arc<Masks>>().inner().clone();
     for label in SPRITES {
@@ -244,11 +244,17 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // проверить облачко, не дожидаясь паузы и срока; в релизную сборку не попадает
     #[cfg(debug_assertions)]
     menu.insert(&MenuItem::with_id(app, "dev-say", "Сказать что-нибудь (dev)", true, None::<&str>)?, 0)?;
+    // проверить поход к миске, не дожидаясь четырёх часов голода
+    #[cfg(debug_assertions)]
+    menu.insert(&MenuItem::with_id(app, "dev-hungry", "Проголодаться (dev)", true, None::<&str>)?, 1)?;
+    // запустить погоню за мышью сейчас, не дожидаясь срока; охотник выключен — включит
+    #[cfg(debug_assertions)]
+    menu.insert(&MenuItem::with_id(app, "dev-hunter", "Охотник (dev)", true, None::<&str>)?, 2)?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("DeskPartner")
         .menu(&menu)
         .on_menu_event(|app, e| match e.id().as_ref() {
-            id @ ("call" | "adopt" | "dev-say") => {
+            id @ ("call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter") => {
                 if let Err(err) = app.emit_to("pet", id, ()) {
                     eprintln!("{id}: {err}");
                 }
@@ -304,9 +310,11 @@ pub fn run() {
             laser::push_pixels,
             laser::push_show,
             laser::push_done,
+            laser::skid,
             senses,
             world::world,
             world::place_pet,
+            world::shelves,
             hit::drag_window,
             store::data_dir,
             store::suggest_dirs,

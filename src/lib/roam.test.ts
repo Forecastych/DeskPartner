@@ -40,6 +40,8 @@ import {
   type RoamEvent,
   side,
   SIDE,
+  SKID_MS,
+  SKID_RUN,
   spawn,
   spotOf,
   STRIP_DEPTH,
@@ -922,19 +924,54 @@ describe('охота за лазером', () => {
 
   it('между ударами — не меньше BONK_COOL; в паузе у стены просто тормозит', () => {
     const p = until(perched(walled, 700), walled, { x: 1300, y: 580 }, (_, e) => e === 'bonk');
-    // 700 мс точка мечется на ±15 px у 915 (не замирает), потом 700 мс за стеной, и так по кругу
+    // 500 мс точка мечется на ±15 px у 915 (не замирает; перебежка короче SKID_RUN — без заноса),
+    // потом 900 мс за стеной, и так по кругу
     const dot = (t: number): Dot =>
-      t % 1400 < 700 ? { x: 915 + ((t / FRAME) % 2 ? 15 : -15), y: 580 } : { x: 1300, y: 580 };
+      t % 1400 < 500 ? { x: 915 + ((t / FRAME) % 2 ? 15 : -15), y: 580 } : { x: 1300, y: 580 };
     const [, first] = hunt(p, walled, dot, 1400);
     expect(first).toEqual([]); // добежала до стены на 1.3 с — ещё пауза
     const [s] = hunt(p, walled, dot, 1350);
     expect(s).toMatchObject({ x: 1100 - HALF, move: 'still' });
     const [, events] = hunt(p, walled, dot, 7000);
-    const times = events.map(([t]) => t);
-    expect(names(events).every((e) => e === 'bonk')).toBe(true);
+    // на развороте от стены к точке и обратно заносит — это не удар
+    expect(names(events).every((e) => e === 'bonk' || e === 'skid')).toBe(true);
+    const times = events.filter(([, e]) => e === 'bonk').map(([t]) => t);
     expect(times.length).toBeGreaterThanOrEqual(2);
     for (let i = 1; i < times.length; i++) expect(times[i] - times[i - 1]).toBeGreaterThanOrEqual(BONK_COOL);
     expect(times[0]).toBeGreaterThanOrEqual(BONK_COOL);
+  });
+
+  it('занос: разогналась, а точка за спиной — едет по инерции SKID_MS и только потом бежит назад', () => {
+    expect(SKID_RUN).toBe(SIDE / 2);
+    // 1 с вправо (120 px > SKID_RUN), потом точка далеко слева
+    const dot = (t: number): Dot => ({ x: t < 1000 ? 1800 : 100, y: 900 });
+    const [p, events] = hunt({ ...standing(w, 500), facing: 1 }, w, dot, 1000 + FRAME);
+    expect(events).toEqual([[1000 + FRAME, 'skid']]);
+    expect(p).toMatchObject({ move: 'still', facing: 1, hunt: { mode: 'skid' } });
+    // весь занос — вправо, мордой вперёд, путь RUN·SKID_MS/2 с торможением до нуля
+    const [s, rest] = hunt(p, w, { x: 100, y: 900 }, SKID_MS);
+    expect(rest).toEqual([]);
+    expect(s.facing).toBe(1);
+    expect(s.x - p.x).toBeCloseTo((RUN * SKID_MS) / 2000, 6);
+    expect(s.hunt?.mode).toBe('run');
+    // занесло — разворачивается и бежит к точке
+    const [r] = hunt(s, w, { x: 100, y: 900 }, 500);
+    expect(r).toMatchObject({ move: 'walk', facing: -1 });
+    expect(r.x).toBeLessThan(s.x);
+  });
+
+  it('без разгона не заносит: короткая перебежка разворачивается сразу', () => {
+    // 400 мс — 48 px, меньше SKID_RUN
+    const dot = (t: number): Dot => ({ x: t < 400 ? 1800 : 100, y: 900 });
+    const [p, events] = hunt({ ...standing(w, 500), facing: 1 }, w, dot, 1000);
+    expect(events).toEqual([]);
+    expect(p.facing).toBe(-1);
+  });
+
+  it('занос упирается в край поверхности, а не вылетает за неё', () => {
+    const dot = (t: number): Dot => ({ x: t < 2000 ? 1900 : 100, y: 900 });
+    const [p] = hunt({ ...standing(w, 1920 - HALF - 200), facing: 1 }, w, dot, 2000 + SKID_MS + FRAME);
+    expect(p.x).toBeLessThanOrEqual(1920 - HALF);
   });
 
   it('врезается только с разбега: стоя у стены — нет', () => {

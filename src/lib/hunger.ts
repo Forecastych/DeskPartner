@@ -78,6 +78,12 @@ export function feedBowl(b: Belly): Belly {
   return { ...b, sinceMeal: 0, sinceHuman: 0 };
 }
 
+/** Проверка из трея dev-сборки: прокрутить голод до «захотела есть». Сытость не убавляет, ушедшую не трогает. */
+export function starve(b: Belly): Belly {
+  if (isHungry(b) || b.away > 0 || b.gone) return b;
+  return { ...b, sinceMeal: HUNGRY_AFTER_MS };
+}
+
 /** ЛКМ по кормушке: порция сверху, и это забота человека — счётчик побега сначала. */
 export function refill(b: Belly): Belly {
   if (b.gone) return b;

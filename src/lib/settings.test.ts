@@ -6,6 +6,8 @@ describe('настройки', () => {
     const d = defaults();
     expect(d).toMatchObject({ feeder: false, bed: false, gameWindow: false, sites: false, reviews: false, hideFromCapture: true });
     expect(d).toMatchObject({ mode: 'calm', chatter: 'sometimes', topics: [], tmdbKey: '' });
+    // охотник выключен; включили — по панели задач
+    expect(d).toMatchObject({ hunter: false, hunterArea: 'taskbar' });
   });
 
   it('туда и обратно без потерь', () => {
@@ -21,6 +23,15 @@ describe('настройки', () => {
   it('битое поле заменяется поштучно, остальные живут', () => {
     const s = parse(JSON.stringify({ feeder: true, bed: 'yes', mode: 'chaos', chatter: 1, topics: ['космос', 'вязание', 7], tmdbKey: '  k  ' }));
     expect(s).toMatchObject({ feeder: true, bed: false, mode: 'calm', chatter: 'sometimes', topics: ['космос'], tmdbKey: 'k' });
+  });
+
+  it('охотник: битое поле — по умолчанию, остальное живёт', () => {
+    expect(parse(JSON.stringify({ hunter: true, hunterArea: 'screen' }))).toMatchObject({ hunter: true, hunterArea: 'screen' });
+    expect(parse(JSON.stringify({ hunter: 'да', hunterArea: 'desk', feeder: true }))).toMatchObject({
+      hunter: false,
+      hunterArea: 'taskbar',
+      feeder: true,
+    });
   });
 
   it('темы — в порядке списка и без повторов', () => {

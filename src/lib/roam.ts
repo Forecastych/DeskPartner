@@ -128,7 +128,7 @@ const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v
 const frameMs = (dt: number): number => Math.min(Math.max(dt, 0), MAX_DT_MS) || 0;
 /** Зажать в [lo, hi]; если отрезок вывернут (места нет) — его середина. */
 const fit = (v: number, lo: number, hi: number): number => (lo <= hi ? clamp(v, lo, hi) : (lo + hi) / 2);
-const inRect = (r: Rect, x: number, y: number): boolean =>
+export const inRect = (r: Rect, x: number, y: number): boolean =>
   x >= r.left && x < r.right && y >= r.top && y < r.bottom;
 /** Под лапами ли поверхность: right исключителен, как у Rect. */
 const covers = (s: Surface, x: number): boolean => x >= s.left && x < s.right;
@@ -539,8 +539,8 @@ function fallStep(pet: Pet, world: World, all: Surface[], dt: number): [Pet, Roa
   return [{ ...landed, move: restMove(landed) }, 'landed'];
 }
 
-/** Один кадр. Чистая функция: возвращает новый объект и событие, вход не трогает. */
-export function step(pet: Pet, world: World, dt: number): [Pet, RoamEvent | null] {
+/** Один кадр. Чистая функция: возвращает новый объект и событие, вход не трогает. pace — скорость шага, логич. px/с. */
+export function step(pet: Pet, world: World, dt: number, pace = WALK): [Pet, RoamEvent | null] {
   const ms = frameMs(dt);
   const all = surfaces(world);
   // Охоту бросили, не позвав endChase: снять её здесь, чтобы не осталась цель погони.
@@ -558,7 +558,7 @@ export function step(pet: Pet, world: World, dt: number): [Pet, RoamEvent | null
   const [p, c, e] = ground(pet, world, all);
   if (!c) return [p, e];
   if (p.move === 'still') return [p, null];
-  return walkStep(p, world, all, c, ms);
+  return walkStep(p, world, all, c, ms, pace);
 }
 
 /** Назначить цель; уход за край отменяется. В прыжке и падении цель подхватится после приземления. */
@@ -623,6 +623,39 @@ export function enter(pet: Pet, world: World): Pet {
     jump: null,
     vy: 0,
   };
+}
+
+/** Внешний край: монитор и сторона, с которой у него нет соседа. */
+export interface Exit {
+  monitor: number;
+  dir: 1 | -1;
+}
+
+/** Все внешние края: за любым можно скрыться. */
+export function exits(world: World): Exit[] {
+  const out: Exit[] = [];
+  world.monitors.forEach((_, i) => {
+    for (const dir of [-1, 1] as const) if (neighbor(world, i, dir) < 0) out.push({ monitor: i, dir });
+  });
+  return out;
+}
+
+/** Уйти за край e: по полу его монитора к краю и дальше наружу. Уже на этом полу — сразу наружу. */
+export function leaveBy(pet: Pet, world: World, e: Exit): Pet {
+  if (pet.move === 'out' || !world.monitors[e.monitor]) return pet;
+  const f = floorOf(surfaces(world), e.monitor);
+  const half = side(world.monitors[e.monitor]) / 2;
+  const goal = pet.on === f.id ? null : { surface: f.id, x: e.dir > 0 ? f.right - half : f.left + half };
+  return { ...pet, goal, exit: e.dir, move: pet.move === 'still' ? 'walk' : pet.move };
+}
+
+/** Сидит сразу за краем e, не видна: оттуда её выведет `enter`. */
+export function behind(world: World, e: Exit, pet: Pet): Pet {
+  const m = world.monitors[e.monitor];
+  if (!m) return pet;
+  const half = side(m) / 2;
+  const x = e.dir > 0 ? m.work.right + half : m.work.left - half;
+  return { ...pet, x, y: m.work.bottom, move: 'out', facing: e.dir, on: null, hwnd: null, dx: 0, goal: null, exit: e.dir, jump: null, vy: 0 };
 }
 
 /** Число из rnd, зажатое в [0, 1). */
@@ -846,9 +879,13 @@ export const BONK_RUN = SIDE / 4;
 export const BONK_COOL = 1500;
 /** Допуск совпадения конца кромки и края рамки-стены, физ. px. */
 const WALL_TOL = 2;
+/** Занос: цель оказалась за спиной на бегу — кошка столько мс едет по инерции, тормозя до нуля... */
+export const SKID_MS = 400;
+/** ...если перед этим пробежала без остановки столько логич. px. */
+export const SKID_RUN = SIDE / 2;
 
-/** run — бежит или стоит, следя за точкой; crouch — припала; pounce — в прыжке на точку; bonk — отскок от стены. */
-export type HuntMode = 'run' | 'crouch' | 'pounce' | 'bonk';
+/** run — бежит или стоит, следя за точкой; crouch — припала; pounce — в прыжке на точку; bonk — отскок от стены; skid — занос на развороте. */
+export type HuntMode = 'run' | 'crouch' | 'pounce' | 'bonk' | 'skid';
 export interface Hunt {
   mode: HuntMode;
   /** Мс в текущем режиме. */
@@ -862,8 +899,8 @@ export interface Hunt {
   /** Пробежала без остановки, физ. px. */
   ran: number;
 }
-/** crouch — припала к замершей рядом точке; pounce — прыгнула на неё; bonk — с разбегу врезалась в стену. */
-export type ChaseEvent = 'crouch' | 'pounce' | 'bonk';
+/** crouch — припала к замершей рядом точке; pounce — прыгнула на неё; bonk — с разбегу врезалась в стену; skid — занесло на развороте. */
+export type ChaseEvent = 'crouch' | 'pounce' | 'bonk' | 'skid';
 export interface Dot {
   x: number;
   y: number;
@@ -1017,6 +1054,14 @@ export function chase(pet: Pet, world: World, dot: Dot, dt: number): [Pet, Chase
     }
     h = { ...h, mode: 'run', t: 0 };
   }
+  if (h.mode === 'skid') {
+    // Едет мордой вперёд, скорость падает от RUN до нуля за SKID_MS: путь за кадр — интеграл скорости.
+    const t1 = Math.min(h.t, SKID_MS);
+    const t0 = Math.min(h.t - ms, SKID_MS);
+    const dist = (RUN * m.scale * (t1 - t0 - (t1 * t1 - t0 * t0) / (2 * SKID_MS))) / 1000;
+    const slid = standOn(g, world, c, within(g.x + g.facing * dist, reach(world, c)));
+    return stand(slid, h.t < SKID_MS ? h : { ...h, mode: 'run', t: 0 });
+  }
 
   const aim = aimAt(world, all, c, dot, di);
   const close =
@@ -1036,6 +1081,9 @@ export function chase(pet: Pet, world: World, dot: Dot, dt: number): [Pet, Chase
   const d = aim.x - g.x;
   if (aim.surface.id === c.id && Math.abs(d) <= dz && (g.move === 'still' || Math.sign(d) !== g.facing))
     return stand(g, h);
+  // Разогналась, а цель за спиной — сразу не развернуться: проезжает по инерции.
+  if (g.move === 'walk' && Math.abs(d) > dz && Math.sign(d) === -g.facing && h.ran >= SKID_RUN * m.scale)
+    return stand(g, { ...h, mode: 'skid', t: 0 }, 'skid');
 
   const run: Pet = { ...g, goal: { surface: aim.surface.id, x: aim.x }, move: 'walk' };
   const [p0, e0] = walkStep(run, world, all, c, ms, RUN);

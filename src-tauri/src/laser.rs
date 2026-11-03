@@ -13,15 +13,14 @@
 //!
 //! Два своих окна, оба прозрачные, сквозь них кликают, фокус они не берут никогда и всегда
 //! спрятаны от записи экрана: "laser" — сама точка, её водит за курсором этот поток;
-//! "push" — эффект заноса. Когда точка круто разворачивается ([`Turns`]), кусок экрана вокруг
-//! разворота снимается в память (BitBlt), окно "push" ложится ровно поверх и рисует этот
-//! снимок с искажением: то, что было под точкой, отбросило по ходу заноса, и оно пружинит
-//! обратно. На экране ничего не двигается по-настоящему. Снимок не пишется на диск и в лог,
+//! "push" — эффект заноса. Когда кошку на охоте заносит на развороте (roam.ts, режим 'skid'),
+//! окно питомца зовёт [`skid`]: кусок экрана вокруг её лап снимается в память (BitBlt), окно
+//! "push" ложится ровно поверх и рисует этот снимок с искажением: то, что было под лапами,
+//! отбросило по ходу заноса, и оно пружинит обратно. На экране ничего не двигается по-настоящему. Снимок не пишется на диск и в лог,
 //! уходит только окну "push" и выбрасывается сразу после эффекта (а невостребованный — через [`SHOT_TTL`]).
 
 use crate::hit::SPRITE;
 use crate::world::Rect;
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -35,20 +34,10 @@ const POLL: Duration = Duration::from_micros(16_667);
 const SLOW: Duration = Duration::from_millis(500);
 /// Сторона окна точки, логические пиксели. Сама точка — около 10 px, остальное — свечение.
 const DOT: f64 = 32.0;
-/// Сторона снимаемого вокруг разворота квадрата, логические пиксели.
+/// Сторона снимаемого вокруг лап квадрата, логические пиксели.
 const AREA: f64 = 160.0;
 /// Невостребованный снимок дольше не держим: окно "push" забирает его за миллисекунды.
 const SHOT_TTL: Duration = Duration::from_secs(1);
-
-/// Отрезок пути, по которому судят о направлении: несколько опросов, дрожь руки усредняется.
-pub const LEG: Duration = Duration::from_millis(60);
-/// Минимальная длина входящего и исходящего отрезков, логические пиксели: за [`LEG`] это
-/// ~300 px/с. Медленный поворот — не занос, а неподвижный курсор и дрожь столько не набегают.
-pub const MIN_LEG: f64 = 18.0;
-/// Разворот от 120°: косинус угла между входящим и исходящим направлениями не больше −0.5.
-const TURN_COS: f64 = -0.5;
-/// Пауза после заноса: один разворот — один эффект.
-pub const COOLDOWN: Duration = Duration::from_millis(300);
 
 /// Ctrl в одиночку. Только логика: что зажато, решает поток опроса.
 #[derive(Default)]
@@ -78,69 +67,15 @@ impl Trigger {
     }
 }
 
-/// Крутой разворот точки.
+/// Занос кошки.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Turn {
-    /// Где развернулась: самая дальняя по ходу точка пути, туда её и занесло. Физ. пиксели.
+    /// Где её лапы, физ. пиксели рабочего стола.
     pub x: f64,
     pub y: f64,
-    /// Куда шла до разворота, единичный вектор: туда и отбрасывает то, что было под ней.
+    /// Куда её несёт, единичный вектор: туда и отбрасывает то, что было под лапами.
     pub dx: f64,
     pub dy: f64,
-}
-
-/// Ищет крутые развороты на пути курсора. Только логика, без WinAPI.
-///
-/// Каждый опрос кладёт точку в след. Опора — последняя точка, которой уже [`LEG`]; входящее
-/// направление — от точки на [`LEG`] раньше опоры до неё, исходящее — от опоры до сейчас.
-/// Оба отрезка не короче `min_leg`, угол между ними от 120° — разворот. Сообщаем его с
-/// задержкой около [`LEG`], зато без ложных срабатываний на дрожи.
-pub struct Turns {
-    trail: VecDeque<(f64, f64, Instant)>,
-    /// [`MIN_LEG`] в физических пикселях монитора, где сейчас точка.
-    min_leg: f64,
-    last: Option<Instant>,
-}
-
-impl Turns {
-    pub fn new(min_leg: f64) -> Self {
-        Turns { trail: VecDeque::new(), min_leg, last: None }
-    }
-
-    pub fn set_min_leg(&mut self, min_leg: f64) {
-        self.min_leg = min_leg;
-    }
-
-    /// Забыть путь: точку погасили или зажгли заново.
-    pub fn reset(&mut self) {
-        self.trail.clear();
-        self.last = None;
-    }
-
-    pub fn feed(&mut self, x: f64, y: f64, at: Instant) -> Option<Turn> {
-        self.trail.push_back((x, y, at));
-        while self.trail.front().is_some_and(|s| at.duration_since(s.2) > LEG * 4) {
-            self.trail.pop_front();
-        }
-        if self.last.is_some_and(|t| at.duration_since(t) < COOLDOWN) {
-            return None;
-        }
-        let k = self.trail.iter().rposition(|s| at.duration_since(s.2) >= LEG)?;
-        let pivot = self.trail[k];
-        let s = self.trail.iter().take(k).rposition(|s| pivot.2.duration_since(s.2) >= LEG)?;
-        let start = self.trail[s];
-        let (ix, iy) = (pivot.0 - start.0, pivot.1 - start.1);
-        let (ox, oy) = (x - pivot.0, y - pivot.1);
-        let (il, ol) = (ix.hypot(iy), ox.hypot(oy));
-        if il < self.min_leg || ol < self.min_leg || (ix * ox + iy * oy) / (il * ol) > TURN_COS {
-            return None;
-        }
-        let (dx, dy) = (ix / il, iy / il);
-        let ahead = |p: &&(f64, f64, Instant)| (p.0 - pivot.0) * dx + (p.1 - pivot.1) * dy;
-        let tip = self.trail.range(k..).max_by(|a, b| ahead(a).total_cmp(&ahead(b)))?;
-        self.last = Some(at);
-        Some(Turn { x: tip.0, y: tip.1, dx, dy })
-    }
 }
 
 /// Квадрат `side` вокруг точки, обрезанный монитором.
@@ -270,6 +205,20 @@ pub fn set_laser(on: bool) {
     if !on {
         OFF.store(true, Ordering::Relaxed);
     }
+}
+
+/// Кошку занесло: лапы в (x, y) физ. px, несёт в сторону (dx, dy). Снимок — в своём потоке,
+/// команда возвращается сразу. Без лазера тоже: на погоне за мышью (mouse.ts).
+#[tauri::command]
+pub fn skid(app: AppHandle, x: f64, y: f64, dx: f64, dy: f64) {
+    let l = dx.hypot(dy);
+    if !(l > 0.0 && x.is_finite() && y.is_finite()) {
+        return;
+    }
+    #[cfg(windows)]
+    sys::skid_soon(app, Turn { x, y, dx: dx / l, dy: dy / l });
+    #[cfg(not(windows))]
+    let _ = app;
 }
 
 /// Пиксели снимка `id`, RGBA построчно сверху вниз. Отдаются один раз: в памяти Rust
@@ -568,8 +517,14 @@ mod sys {
         }
     }
 
-    /// Снять место разворота и позвать окно "push". Идёт в своём потоке: BitBlt с экрана
-    /// занимает до десятков миллисекунд, точка за курсором за это время не должна замирать.
+    /// Снять место заноса и позвать окно "push" — в своём потоке: BitBlt с экрана занимает до
+    /// десятков миллисекунд, ни окно питомца, ни точка за курсором за это время не должны замирать.
+    pub fn skid_soon(app: AppHandle, turn: Turn) {
+        if HWNDS.get().is_some_and(|h| h.push_ok) {
+            let _ = std::thread::Builder::new().name("laser-skid".into()).spawn(move || skid(app, turn));
+        }
+    }
+
     fn skid(app: AppHandle, turn: Turn) {
         let (tx, ty) = (turn.x.round() as i32, turn.y.round() as i32);
         let (mon, scale) = monitor(tx, ty);
@@ -614,7 +569,6 @@ mod sys {
     fn run(app: AppHandle) {
         let Some(h) = HWNDS.get() else { return };
         let mut trigger = Trigger::default();
-        let mut turns = Turns::new(MIN_LEG);
         let mut on = false;
         let mut quiet = false;
         let mut was_sticky = false;
@@ -683,7 +637,6 @@ mod sys {
 
             if want != on {
                 on = want;
-                turns.reset();
                 last = None;
                 if !on {
                     hide(h.dot);
@@ -696,9 +649,6 @@ mod sys {
                 continue;
             }
             let Some((x, y)) = cursor() else { continue };
-            if slow_tick || last.is_none() {
-                turns.set_min_leg(MIN_LEG * monitor(x, y).1);
-            }
             if last != Some((x, y)) || slow_tick {
                 // при включении и раз в SLOW — показать и поднять над окнами, что встали поверх
                 move_dot(h.dot, x, y, last.is_none() || slow_tick);
@@ -707,12 +657,6 @@ mod sys {
                 last = Some((x, y));
                 if let Err(err) = app.emit_to("pet", "laser", Dot { x, y }) {
                     eprintln!("laser: {err}");
-                }
-            }
-            if let Some(turn) = turns.feed(x as f64, y as f64, at) {
-                if h.push_ok {
-                    let app = app.clone();
-                    let _ = std::thread::Builder::new().name("laser-skid".into()).spawn(move || skid(app, turn));
                 }
             }
         }
@@ -814,127 +758,6 @@ mod tests {
         t.disarm();
         t.feed(true, false, ms(t0, 800));
         assert!(t.feed(true, false, ms(t0, 1200)));
-    }
-
-    /// Ведёт курсор по точкам `path` (x, y) с шагом опроса ~16.7 мс, возвращает развороты.
-    fn drive(turns: &mut Turns, t0: Instant, path: &[(f64, f64)]) -> Vec<(u64, Turn)> {
-        let mut out = Vec::new();
-        for (i, &(x, y)) in path.iter().enumerate() {
-            let at = t0 + POLL * i as u32;
-            if let Some(t) = turns.feed(x, y, at) {
-                out.push((i as u64, t));
-            }
-        }
-        out
-    }
-
-    /// Прямо со скоростью `v` px за опрос `n` шагов от `from` в направлении `dir`.
-    fn line(from: (f64, f64), dir: (f64, f64), v: f64, n: usize) -> Vec<(f64, f64)> {
-        let l = dir.0.hypot(dir.1);
-        (1..=n).map(|i| (from.0 + dir.0 / l * v * i as f64, from.1 + dir.1 / l * v * i as f64)).collect()
-    }
-
-    fn path(legs: &[((f64, f64), usize)], v: f64) -> Vec<(f64, f64)> {
-        let mut p = vec![(500.0, 500.0)];
-        for &(dir, n) in legs {
-            let from = *p.last().unwrap();
-            p.extend(line(from, dir, v, n));
-        }
-        p
-    }
-
-    #[test]
-    fn straight_line_is_not_a_turn() {
-        let mut t = Turns::new(MIN_LEG);
-        assert!(drive(&mut t, Instant::now(), &path(&[((1.0, 0.3), 40)], 20.0)).is_empty());
-    }
-
-    #[test]
-    fn still_cursor_is_not_a_turn() {
-        let mut t = Turns::new(MIN_LEG);
-        assert!(drive(&mut t, Instant::now(), &vec![(300.0, 300.0); 60]).is_empty());
-    }
-
-    #[test]
-    fn jitter_is_not_a_turn() {
-        let mut t = Turns::new(MIN_LEG);
-        // дрожь руки: туда-сюда на 3 px каждый опрос
-        let p: Vec<_> = (0..120).map(|i| (300.0 + [0.0, 3.0, -2.0, 2.5][i % 4], 300.0 + [1.0, -3.0, 2.0, 0.0][i % 4])).collect();
-        assert!(drive(&mut t, Instant::now(), &p).is_empty());
-    }
-
-    #[test]
-    fn sharp_reversal_is_a_turn_at_the_tip() {
-        let mut t = Turns::new(MIN_LEG);
-        // вправо 10 опросов по 25 px (1500 px/с), потом обратно
-        let p = path(&[((1.0, 0.0), 10), ((-1.0, 0.0), 10)], 25.0);
-        let found = drive(&mut t, Instant::now(), &p);
-        assert_eq!(found.len(), 1);
-        let (i, turn) = found[0];
-        assert!((turn.x - 750.0).abs() < 1e-9 && (turn.y - 500.0).abs() < 1e-9, "{turn:?}");
-        assert!((turn.dx - 1.0).abs() < 1e-9 && turn.dy.abs() < 1e-9);
-        // и заметили быстро: не позже ~100 мс после разворота
-        assert!(i <= 10 + 6, "опрос {i}");
-    }
-
-    #[test]
-    fn turn_angle_threshold() {
-        let a = |deg: f64| {
-            let r = deg.to_radians();
-            let mut t = Turns::new(MIN_LEG);
-            // поворот на deg от направления «вправо»
-            let p = path(&[((1.0, 0.0), 10), ((r.cos(), r.sin()), 10)], 25.0);
-            drive(&mut t, Instant::now(), &p)
-        };
-        assert!(a(90.0).is_empty());
-        assert!(a(110.0).is_empty());
-        let found = a(135.0);
-        assert_eq!(found.len(), 1);
-        // точка — у угла, а не там, где разворот заметили
-        assert!((found[0].1.x - 750.0).abs() <= 25.0, "{:?}", found[0].1);
-        assert_eq!(a(170.0).len(), 1);
-    }
-
-    #[test]
-    fn slow_reversal_is_not_a_skid() {
-        let mut t = Turns::new(MIN_LEG);
-        // 4 px за опрос — 240 px/с: за LEG не набирается MIN_LEG
-        let p = path(&[((1.0, 0.0), 30), ((-1.0, 0.0), 30)], 4.0);
-        assert!(drive(&mut t, Instant::now(), &p).is_empty());
-    }
-
-    #[test]
-    fn min_leg_scales_with_monitor() {
-        let p = path(&[((1.0, 0.0), 10), ((-1.0, 0.0), 10)], 7.0);
-        assert_eq!(drive(&mut Turns::new(MIN_LEG), Instant::now(), &p).len(), 1);
-        // на мониторе 200% та же скорость в физических пикселях — вдвое медленнее для глаза
-        assert!(drive(&mut Turns::new(MIN_LEG * 2.0), Instant::now(), &p).is_empty());
-    }
-
-    #[test]
-    fn cooldown_merges_quick_turns() {
-        let t0 = Instant::now();
-        // три разворота подряд через ~100 мс: тряска вправо-влево
-        let p = path(&[((1.0, 0.0), 8), ((-1.0, 0.0), 6), ((1.0, 0.0), 6), ((-1.0, 0.0), 6)], 25.0);
-        let found = drive(&mut Turns::new(MIN_LEG), t0, &p);
-        assert_eq!(found.len(), 1, "{found:?}");
-        // а через паузу больше COOLDOWN — второй
-        let p = path(&[((1.0, 0.0), 8), ((-1.0, 0.0), 24), ((1.0, 0.0), 10)], 25.0);
-        assert_eq!(drive(&mut Turns::new(MIN_LEG), t0, &p).len(), 2);
-    }
-
-    #[test]
-    fn reset_forgets_the_path() {
-        let t0 = Instant::now();
-        let mut t = Turns::new(MIN_LEG);
-        let p = path(&[((1.0, 0.0), 10)], 25.0);
-        drive(&mut t, t0, &p);
-        t.reset();
-        // после сброса тот же путь обратно — без входящего отрезка разворота нет
-        let back: Vec<_> = line((750.0, 500.0), (-1.0, 0.0), 25.0, 10);
-        let found: Vec<_> =
-            back.iter().enumerate().filter_map(|(i, &(x, y))| t.feed(x, y, t0 + POLL * (11 + i as u32))).collect();
-        assert!(found.is_empty());
     }
 
     #[test]
