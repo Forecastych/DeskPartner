@@ -718,6 +718,7 @@ name = "deskpartner"
 version = "0.0.5"
 dependencies = [
  "chrono",
+ "quick-xml",
  "serde",
  "serde_json",
  "tauri",
