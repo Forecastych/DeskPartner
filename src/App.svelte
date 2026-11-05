@@ -8,7 +8,8 @@
   import * as mouse from './lib/mouse';
   import * as yarn from './lib/yarn';
   import * as roam from './lib/roam';
-  import { parse, serialize, type Chatter, type HunterArea, type Settings, type Topic } from './lib/settings';
+  import * as news from './lib/news';
+  import { parse, serialize, TOPICS, type Chatter, type HunterArea, type Settings, type Topic } from './lib/settings';
   import * as sleepy from './lib/sleep';
   import { ANIMS, BOWL_X, bowlLeft, draw, fatOn, flip, ground, hitMask, onBowl, SCRUFF_AT, SIZE, type AnimName, type Frame } from './lib/sprite';
   import { localLegacy, memoryStore, open, tauriBackend, type Store } from './lib/store';
@@ -52,6 +53,10 @@
   const SAVE_MS = 60_000;
   /** Википедия не ответила — следующая попытка через час: факты не срочные. */
   const WIKI_RETRY_MS = 60 * 60_000;
+  /** Новостей нет (лента ещё не скачана, нет сети) — спросить снова через столько. */
+  const NEWS_RETRY_MS = 10 * 60_000;
+  /** Новость старше — уже не новость: отложенную до вечера выбрасываем и берём свежую. */
+  const NEWS_STALE_S = 2 * 24 * 3600;
   /** Пока кошки нет на экране, проверять, не вернулась ли, раз в секунду. */
   const AWAY_TICK_MS = 1000;
   /** С лежаком засыпать уходит в него чаще, чем куда-то ещё. */
@@ -151,6 +156,13 @@
   let wikiDay = '';
   /** Раньше этого не спрашиваем: идёт запрос или сети не было — ждём, а не долбим. */
   let wikiNext = 0;
+  /**
+   * Одна новость про запас, пока её не скажут: news_pick помечает выданное показанным, поэтому
+   * берём по одной, а не пачкой. Идёт первой среди фактов своей темы.
+   */
+  let held: { topic: Topic; text: string; date: number } | null = null;
+  /** Раньше этого за новостью не ходим: запрос в пути или новостей не было. */
+  let newsNext = 0;
   /** Облачко висит до этих пор; 0 — молчит. */
   let speakingUntil = 0;
   /** Облачко вызвано из трея dev-сборки: висит, даже если кошке не до разговоров. */
@@ -623,6 +635,7 @@
     }
     if (frozen || !senses || !head) return;
     askWiki(now);
+    askNews(now);
     const [next, line] = chatter.say(talk, moment(now, senses), chatterLevel, Math.random);
     talk = next;
     if (line) speak(line.text, now);
@@ -637,8 +650,26 @@
       hungry: isHungry(belly) && !mealPending,
       free: free(),
       topics,
-      extra: wikiFacts,
+      extra: held ? { ...wikiFacts, [held.topic]: [held.text, ...(wikiFacts[held.topic] ?? [])] } : wikiFacts,
     };
+  }
+
+  /**
+   * Новость по темам: одна про запас. Сказали, тему сняли или новость устарела — берём следующую.
+   * В рабочее время — только из рабочих тем: остальное chatter всё равно отложит до вечера.
+   */
+  function askNews(now: number) {
+    const fresh = held && topics.includes(held.topic) && !talk.told.includes(held.text) && now / 1000 - held.date < NEWS_STALE_S;
+    if (fresh) return;
+    held = null;
+    const work = chatter.isWork(new Date(now));
+    const allowed = topics.filter((t) => !work || chatter.WORK_TOPICS.includes(t));
+    if (!allowed.length || now < newsNext) return;
+    newsNext = now + NEWS_RETRY_MS;
+    news.pickNews(invoke, allowed).then((item) => {
+      const topic = TOPICS.find((t) => t === item?.topic);
+      if (item && topic) held = { topic, text: news.newsLine(item), date: item.date };
+    });
   }
 
   /**

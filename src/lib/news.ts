@@ -42,8 +42,13 @@ export async function pickNews(invoke: Invoke, topics: readonly string[]): Promi
   }
 }
 
+/** Длиннее заголовок обрезаем: облачко не должно разрастись во всю кошку. */
+export const MAX_TITLE = 120;
+
 /** Реплика для облачка: «Пишут: <заголовок> (Источник)»; про английские — с пометкой. */
 export function newsLine(item: NewsItem): string {
   const head = item.lang === 'en' ? 'Пишут (англ.):' : 'Пишут:';
-  return `${head} ${item.title.trim()} (${item.source})`;
+  const t = item.title.trim();
+  const title = t.length > MAX_TITLE ? `${t.slice(0, MAX_TITLE - 1).trimEnd()}…` : t;
+  return `${head} ${title} (${item.source})`;
 }
