@@ -87,7 +87,7 @@
       Узнавать сайты в браузере
     </Check>
 
-    <Check bind:checked={settings.reviews} hint="Нужен твой бесплатный ключ TMDB — своего ключа в программе нет." {disabled}>
+    <Check bind:checked={settings.reviews} hint="Оценки берём из Википедии и Wikidata — наружу уходит только название фильма." {disabled}>
       Подтягивать отзывы о фильмах
     </Check>
 
@@ -96,7 +96,7 @@
         <!-- id="tmdb" читают окна: настройки по нему узнают, что человек сейчас печатает ключ -->
         <TextInput
           id="tmdb"
-          label="Ключ TMDB (API Key)"
+          label="Ключ TMDB (API Key, по желанию)"
           bind:value={settings.tmdbKey}
           mono
           spellcheck="false"
@@ -110,7 +110,7 @@
           <li>Скопируй строку «API Key» и вставь сюда.</li>
         </ol>
         {#if !settings.tmdbKey.trim()}
-          <Hint>Без ключа отзывы не подтянутся.{wizard ? ' Его можно вставить и позже, в настройках.' : ''}</Hint>
+          <Hint>Ключ не обязателен: без него хватит Википедии.{wizard ? ' Его можно вставить и позже, в настройках.' : ''}</Hint>
         {/if}
       </div>
     {/if}
