@@ -8,6 +8,7 @@ mod esc;
 mod hit;
 mod laser;
 mod menu;
+mod news;
 mod shake;
 mod store;
 mod tracker;
@@ -321,10 +322,12 @@ pub fn run() {
             store::set_data_dir,
             store::load_state,
             store::save_state,
+            news::news_pick,
         ])
         .setup(move |app| {
             #[cfg(windows)]
             start_senses(feel);
+            news::start();
             // снимаем сразу: следующий перезапуск (или программа, которую питомец запустит) её не унаследует
             let reopen = std::env::var_os(REOPEN_SETTINGS).is_some();
             std::env::remove_var(REOPEN_SETTINGS);
