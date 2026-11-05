@@ -711,6 +711,21 @@
     speak(line.text, now);
   }
 
+  /**
+   * «Новость» из трея dev-сборки: свежая по любой из тем, мимо сроков и рабочего времени.
+   * Тем нет или ленты ещё не скачаны — так и говорит, чтобы было видно, что пункт сработал.
+   */
+  function newsNow() {
+    if (frozen || !head || away()) return;
+    const show = (text: string) => {
+      if (speakingUntil) hush();
+      forced = true;
+      speak(text, Date.now());
+    };
+    if (!topics.length) return show('Тем не выбрано — новостей не будет.');
+    news.pickNews(invoke, topics).then((item) => show(item ? news.newsLine(item) : 'Новостей пока нет: ленты ещё качаются.'));
+  }
+
   function hush() {
     speakingUntil = 0;
     forced = false;
@@ -1089,6 +1104,7 @@
       nextYarn = 0;
       yarnNow = true;
     });
+    const unnews = listen('dev-news', newsNow);
     // окно настроек уже сохранило файл; кеш обновляем, чтобы следующая галочка в меню не затёрла его старьём
     // Слушаем своим окном: глобальный listen поймал бы и наш же emitTo('settings', 'settings').
     const win = getCurrentWebviewWindow();
@@ -1136,7 +1152,7 @@
       clearTimeout(timer);
       clearInterval(moving);
       clearInterval(id);
-      const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn];
+      const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn, unnews];
       for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, undrag, unlaser, unlaserOff, unshoo]) off.then((f) => f());
     };
   });

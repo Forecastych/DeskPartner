@@ -255,11 +255,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // вынести клубок сейчас; выключен — включит
     #[cfg(debug_assertions)]
     menu.insert(&MenuItem::with_id(app, "dev-yarn", "Клубок (dev)", true, None::<&str>)?, 3)?;
+    // показать новость по темам сейчас, не дожидаясь срока факта
+    #[cfg(debug_assertions)]
+    menu.insert(&MenuItem::with_id(app, "dev-news", "Новость (dev)", true, None::<&str>)?, 4)?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("DeskPartner")
         .menu(&menu)
         .on_menu_event(|app, e| match e.id().as_ref() {
-            id @ ("call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn") => {
+            id @ ("call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn" | "dev-news") => {
                 if let Err(err) = app.emit_to("pet", id, ()) {
                     eprintln!("{id}: {err}");
                 }
