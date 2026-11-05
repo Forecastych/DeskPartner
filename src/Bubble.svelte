@@ -101,7 +101,7 @@
           <span class="up"><Icon name="heart" /></span>Ещё
         </button>
         <button class="vote ui-px" type="button" title="Неинтересно — меньше такого" onpointerdown={(e) => voted(e, false)}>
-          <span class="down"><Icon name="broken" /></span>Не то
+          <span class="down"><Icon name="broken" /></span>Мимо
         </button>
       </div>
     {/if}
