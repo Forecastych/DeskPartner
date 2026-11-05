@@ -20,6 +20,8 @@ const LABEL: &str = "bubble";
 struct Text {
     gen: u64,
     text: String,
+    /// Новость: под текстом кнопки «больше такого / меньше такого».
+    vote: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -63,8 +65,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// Сказать `text` над точкой (`x`, `top`) — серединой и макушкой питомца. Прежняя реплика пропадает.
+/// `vote` — это новость, под ней кнопки лайк/диз.
 #[tauri::command]
-pub async fn say(app: AppHandle, text: String, x: i32, top: i32) -> Result<(), String> {
+pub async fn say(app: AppHandle, text: String, x: i32, top: i32, vote: Option<bool>) -> Result<(), String> {
     let w = window(&app)?;
     let hwnd = sys::hwnd(&w)?;
     let gen = {
@@ -77,7 +80,8 @@ pub async fn say(app: AppHandle, text: String, x: i32, top: i32) -> Result<(), S
         sys::move_to(hwnd, (x, top));
         s.gen
     };
-    w.emit_to(LABEL, "bubble-text", Text { gen, text }).map_err(|e| e.to_string())
+    let vote = vote.unwrap_or(false);
+    w.emit_to(LABEL, "bubble-text", Text { gen, text, vote }).map_err(|e| e.to_string())
 }
 
 /// Окно облачка измерило себя: `width`×`height` — физические пиксели. Ставим и показываем.

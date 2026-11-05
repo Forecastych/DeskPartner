@@ -285,6 +285,15 @@ export function liked(t: Talk, now: number): Talk {
   return t.topic ? { ...s, topic: '', weights: weigh(t.weights, t.topic, WEIGHT_UP) } : s;
 }
 
+/**
+ * Лайк или диз на новость в облачке: тема звучит чаще или реже. Это не «отмахнулись» — болтать
+ * реже кошка не станет, а лайк, как и поглаживание, прощает прошлые отмашки.
+ */
+export function vote(t: Talk, topic: string, up: boolean): Talk {
+  const s = up && t.shooed ? { ...t, shooed: 0 } : t;
+  return { ...s, topic: '', weights: weigh(t.weights, topic, up ? WEIGHT_UP : WEIGHT_DOWN) };
+}
+
 /** Уровень сменили в настройках — срок пересчитываем от последней реплики (или от сейчас). */
 export function retime(t: Talk, level: Chatter, now: number, rand: () => number): Talk {
   return { ...t, next: (t.spoke || now) + interval(level, t.shooed, rand) };

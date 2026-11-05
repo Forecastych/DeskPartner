@@ -331,6 +331,10 @@ pub fn run() {
             store::save_state,
             wiki::wiki_today,
             news::news_pick,
+            news::news_topics,
+            news::news_vote,
+            news::news_status,
+            news::news_refresh,
         ])
         .setup(move |app| {
             #[cfg(windows)]

@@ -21,6 +21,7 @@ import {
   shoo,
   shownFor,
   type Talk,
+  vote,
 } from './chatter';
 import { FACTS } from './facts';
 import { TOPICS } from './settings';
@@ -187,6 +188,22 @@ describe('shoo and like', () => {
     const s = { ...t, shooed: 3 };
     expect(liked(s, SAT.getTime() + 30_000).shooed).toBe(0);
     expect(liked(s, SAT.getTime() + 5 * MIN).shooed).toBe(3);
+  });
+
+  it('a vote on news moves its topic weight but not the talking pace', () => {
+    const [t] = say(due(SAT), moment(SAT), 'sometimes', mid);
+    const s = { ...t, shooed: 2, topic: 'кино' };
+    const up = vote(s, 'космос', true);
+    expect(up.weights.космос).toBe(1.5);
+    expect(up.shooed).toBe(0);
+    expect(up.topic).toBe('');
+    const down = vote(s, 'космос', false);
+    expect(down.weights.космос).toBe(0.5);
+    expect(down.shooed).toBe(2);
+    expect(down.next).toBe(s.next);
+    let w = s;
+    for (let i = 0; i < 10; i++) w = vote(w, 'космос', false);
+    expect(w.weights.космос).toBeGreaterThan(0);
   });
 
   it('retime moves the quiet one back into talking', () => {

@@ -160,7 +160,9 @@
    * Одна новость про запас, пока её не скажут: news_pick помечает выданное показанным, поэтому
    * берём по одной, а не пачкой. Идёт первой среди фактов своей темы.
    */
-  let held: { topic: Topic; text: string; date: number } | null = null;
+  let held: { topic: Topic; text: string; date: number; source: string } | null = null;
+  /** На облачке сейчас новость — под ней лайк/диз; голос пойдёт ей. */
+  let voteFor: { topic: Topic; source: string } | null = null;
   /** Раньше этого за новостью не ходим: запрос в пути или новостей не было. */
   let newsNext = 0;
   /** Облачко висит до этих пор; 0 — молчит. */
@@ -638,7 +640,7 @@
     askNews(now);
     const [next, line] = chatter.say(talk, moment(now, senses), chatterLevel, Math.random);
     talk = next;
-    if (line) speak(line.text, now);
+    if (line) speak(line.text, now, held && line.text === held.text ? held : null);
   }
 
   function moment(now: number, s: Senses): chatter.Moment {
@@ -666,9 +668,9 @@
     const allowed = topics.filter((t) => !work || chatter.WORK_TOPICS.includes(t));
     if (!allowed.length || now < newsNext) return;
     newsNext = now + NEWS_RETRY_MS;
-    news.pickNews(invoke, allowed).then((item) => {
+    news.pickNews(invoke, allowed, talk.weights).then((item) => {
       const topic = TOPICS.find((t) => t === item?.topic);
-      if (item && topic) held = { topic, text: news.newsLine(item), date: item.date };
+      if (item && topic) held = { topic, text: news.newsLine(item), date: item.date, source: item.source };
     });
   }
 
@@ -688,10 +690,12 @@
       .catch((e) => console.warn(e));
   }
 
-  function speak(text: string, now: number) {
+  /** Сказать `text`; `about` — это новость, под ней будут лайк/диз. */
+  function speak(text: string, now: number, about: { topic: Topic; source: string } | null = null) {
     if (!head) return;
     speakingUntil = now + chatter.shownFor(text);
-    invoke('say', { text, ...head }).catch(console.error);
+    voteFor = about && { topic: about.topic, source: about.source };
+    invoke('say', { text, ...head, vote: !!about }).catch(console.error);
     persist(now);
   }
 
@@ -717,18 +721,23 @@
    */
   function newsNow() {
     if (frozen || !head || away()) return;
-    const show = (text: string) => {
+    const show = (text: string, about: { topic: Topic; source: string } | null = null) => {
       if (speakingUntil) hush();
       forced = true;
-      speak(text, Date.now());
+      speak(text, Date.now(), about);
     };
     if (!topics.length) return show('Тем не выбрано — новостей не будет.');
-    news.pickNews(invoke, topics).then((item) => show(item ? news.newsLine(item) : 'Новостей пока нет: ленты ещё качаются.'));
+    news.pickNews(invoke, topics, talk.weights).then((item) => {
+      const topic = TOPICS.find((t) => t === item?.topic);
+      if (!item || !topic) return show('Новостей пока нет: ленты ещё качаются.');
+      show(news.newsLine(item), { topic, source: item.source });
+    });
   }
 
   function hush() {
     speakingUntil = 0;
     forced = false;
+    voteFor = null;
     invoke('hush').catch(console.error);
   }
 
@@ -953,6 +962,8 @@
     if (s.yarn && !yarnOn) nextYarn = Date.now() + yarnGap();
     yarnOn = s.yarn;
     topics = s.topics;
+    // ленты новых тем качаются сразу, а не когда кошка соберётся рассказать
+    invoke('news_topics', { topics: [...topics] }).catch(console.error);
     if (s.chatter !== chatterLevel) {
       chatterLevel = s.chatter;
       talk = chatter.retime(talk, chatterLevel, Date.now(), Math.random);
@@ -1138,12 +1149,24 @@
     // облачко смахнули кликом: окно уже спряталось само, кошка запоминает и болтает реже
     const unshoo = win.listen('bubble-shoo', () => {
       speakingUntil = 0;
+      voteFor = null;
       // проверочное облачко смахнули — кошке не в укор
       if (forced) {
         forced = false;
         return;
       }
       talk = chatter.shoo(talk, chatterLevel, Math.random);
+      persist(Date.now());
+    });
+    // лайк/диз под новостью: окно уже спряталось; тема и источник — чаще или реже, болтать реже не станет
+    const unvote = win.listen<{ up: boolean }>('bubble-vote', (e) => {
+      const about = voteFor;
+      speakingUntil = 0;
+      forced = false;
+      voteFor = null;
+      if (!about) return;
+      talk = chatter.vote(talk, about.topic, e.payload.up);
+      invoke('news_vote', { source: about.source, up: e.payload.up }).catch(console.error);
       persist(Date.now());
     });
     return () => {
@@ -1153,7 +1176,7 @@
       clearInterval(moving);
       clearInterval(id);
       const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn, unnews];
-      for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, undrag, unlaser, unlaserOff, unshoo]) off.then((f) => f());
+      for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, undrag, unlaser, unlaserOff, unshoo, unvote]) off.then((f) => f());
     };
   });
 </script>

@@ -8,6 +8,7 @@
   import { onMount, tick } from 'svelte';
   import { defaults, parse, serialize, type Settings } from './lib/settings';
   import { dirHint, errorText, isDriveRoot, pickDir, samePath } from './lib/setup';
+  import NewsFeeds from './NewsFeeds.svelte';
   import SettingsFields from './SettingsFields.svelte';
   import { Button, Dialog, Group, Hint, Radio, Section, TextInput } from './ui';
 
@@ -209,6 +210,10 @@
   {#if saveError}
     <Hint tone="error">{saveError}</Hint>
   {/if}
+
+  <Section title="Новости" rule>
+    <NewsFeeds />
+  </Section>
 
   <Section title="Папка данных" rule>
     <p>

@@ -3,7 +3,8 @@
 //! Фоновый поток раз в несколько часов качает публичные RSS/Atom-ленты выбранных тем
 //! (список — feeds.rs), берёт из записей только заголовок, ссылку и дату, отсеивает
 //! тяжёлое, рекламу и кликбейт (filter.rs) и копит свежее в `news.json` в папке данных.
-//! Фронт берёт по одной новости командой `news_pick`.
+//! Фронт берёт по одной новости командой `news_pick`; лайк/диз под новостью (`news_vote`)
+//! делает источник чаще или реже; настройки показывают статус лент (`news_status`).
 //!
 //! Приватность: наружу уходят только GET к адресам лент — без куки, без идентификаторов,
 //! темы пользователя в запросы не попадают (ленты качаются целиком, выбор — локально).
@@ -15,6 +16,7 @@ mod parse;
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +40,15 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 const BODY_LIMIT: u64 = 4 * 1024 * 1024;
 const USER_AGENT: &str = concat!("DeskPartner/", env!("CARGO_PKG_VERSION"));
 const FILE: &str = "news.json";
+/// «Больше такого» умножает вес источника, «меньше» делит; ноль нельзя — источник просто реже.
+const VOTE_UP: f64 = 1.5;
+const VOTE_DOWN: f64 = 0.5;
+const VOTE_MIN: f64 = 0.25;
+const VOTE_MAX: f64 = 4.0;
+/// Русский источник весит вчетверо: английские добирают, когда русских нет или их не любят.
+const RU_BONUS: f64 = 4.0;
+/// «Обновить сейчас» не качает ленту чаще раза в 5 минут.
+const REFRESH_GAP: i64 = 5 * 60;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct NewsItem {
@@ -62,6 +73,41 @@ struct Cache {
     items: Vec<NewsItem>,
     /// Уже показанные ссылки -> когда показали.
     shown: BTreeMap<String, i64>,
+    /// Голоса «больше/меньше такого»: источник -> вес; нет записи — 1.
+    sources: BTreeMap<String, f64>,
+    /// Последняя попытка скачать ленту: url -> когда и удачно ли. Для статуса в настройках.
+    fetched: BTreeMap<String, Fetched>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+struct Fetched {
+    at: i64,
+    ok: bool,
+}
+
+/// Строка статуса лент в настройках: одна на адрес, общая лента — одна на все свои темы.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct FeedStatus {
+    source: String,
+    lang: String,
+    topics: Vec<String>,
+    /// Последняя попытка: когда и удачно ли; `None` — ещё не качалась.
+    at: Option<i64>,
+    ok: Option<bool>,
+    /// Когда снова; `None` — при первом же проходе потока.
+    next: Option<i64>,
+    /// Сколько новостей источника по этим темам лежит в кэше.
+    items: usize,
+    /// Вес источника по голосам: больше 1 — чаще, меньше — реже.
+    weight: f64,
+}
+
+#[derive(Serialize, Debug)]
+pub struct NewsStatus {
+    /// Поток прямо сейчас качает ленты.
+    busy: bool,
+    now: i64,
+    feeds: Vec<FeedStatus>,
 }
 
 /// Ленты выбранных тем, у которых подошёл срок. Общая лента — один раз на всех.
@@ -80,6 +126,7 @@ fn due(cache: &Cache, now: i64) -> Vec<&'static str> {
 fn merge(cache: &mut Cache, url: &str, entries: Option<&[Entry]>, now: i64) {
     let ttl = if entries.is_some() { TTL_OK } else { TTL_FAIL };
     cache.next.insert(url.to_owned(), now + ttl);
+    cache.fetched.insert(url.to_owned(), Fetched { at: now, ok: entries.is_some() });
     let Some(entries) = entries else { return };
     let feeds: Vec<&Feed> =
         FEEDS.iter().filter(|f| f.url == url && cache.topics.iter().any(|t| t == f.topic)).collect();
@@ -119,7 +166,9 @@ fn prune(cache: &mut Cache, now: i64) {
         *n += 1;
         *n <= PER_TOPIC
     });
-    cache.next.retain(|url, _| FEEDS.iter().any(|f| f.url == url && topics.iter().any(|t| t == f.topic)));
+    let chosen = |url: &String| FEEDS.iter().any(|f| f.url == url && topics.iter().any(|t| t == f.topic));
+    cache.next.retain(|url, _| chosen(url));
+    cache.fetched.retain(|url, _| chosen(url));
     // запись не старше показа, а старше трёх дней в кэш не попадает — дольше помнить незачем
     cache.shown.retain(|_, t| now - *t <= MAX_AGE);
 }
@@ -136,25 +185,93 @@ fn set_topics(cache: &mut Cache, topics: &[String], now: i64) -> bool {
     true
 }
 
-/// Новость для облачка: тема — случайная из тех, где есть непоказанное; внутри темы
-/// сначала русские, из них самая свежая. Выбранная запоминается как показанная.
-fn pick(cache: &mut Cache, now: i64, seed: u64) -> Option<NewsItem> {
+/// Новость для облачка. Тема — случайная по весам `topic_w` (их ведёт chatter) из тех, где
+/// есть непоказанное; источник — случайный по голосам, русские с бонусом; от источника —
+/// его самая свежая (у одного источника сначала русские). Выбранная запоминается как показанная.
+fn pick(cache: &mut Cache, now: i64, seed: u64, topic_w: &BTreeMap<String, f64>) -> Option<NewsItem> {
+    let mut rng = seed;
     let fresh = |i: &&NewsItem| !cache.shown.contains_key(&i.link);
-    let topics: Vec<&String> =
-        cache.topics.iter().filter(|t| cache.items.iter().filter(fresh).any(|i| &i.topic == *t)).collect();
-    if topics.is_empty() {
-        return None;
-    }
-    let topic = topics[(seed % topics.len() as u64) as usize];
-    let item = cache
-        .items
+    let topics: Vec<(&String, f64)> = cache
+        .topics
         .iter()
-        .filter(fresh)
-        .filter(|i| &i.topic == topic)
-        .min_by_key(|i| (i.lang != "ru", -i.date))?
-        .clone();
+        .filter(|t| cache.items.iter().filter(fresh).any(|i| &i.topic == *t))
+        .map(|t| (t, weight(topic_w, t)))
+        .collect();
+    let topic = draw(&topics, &mut rng)?;
+    let mut best: BTreeMap<&str, &NewsItem> = BTreeMap::new();
+    for i in cache.items.iter().filter(fresh).filter(|i| &i.topic == topic) {
+        let b = best.entry(&i.source).or_insert(i);
+        if (i.lang != "ru", -i.date) < (b.lang != "ru", -b.date) {
+            *b = i;
+        }
+    }
+    let bonus = |i: &NewsItem| if i.lang == "ru" { RU_BONUS } else { 1.0 };
+    let sources: Vec<(&NewsItem, f64)> =
+        best.values().map(|i| (*i, weight(&cache.sources, &i.source) * bonus(i))).collect();
+    let item = draw(&sources, &mut rng)?.clone();
     cache.shown.insert(item.link.clone(), now);
     Some(item)
+}
+
+/// Вес из таблицы голосов в пределах; нет записи или мусор — 1.
+fn weight(w: &BTreeMap<String, f64>, key: &str) -> f64 {
+    w.get(key).copied().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0).clamp(VOTE_MIN, VOTE_MAX)
+}
+
+/// Голос за источник: «больше такого» или «меньше».
+fn vote(cache: &mut Cache, source: &str, up: bool) {
+    let w = weight(&cache.sources, source) * if up { VOTE_UP } else { VOTE_DOWN };
+    cache.sources.insert(source.to_owned(), w.clamp(VOTE_MIN, VOTE_MAX));
+}
+
+/// Случайный по весам. Случайность — splitmix64 от зерна, чтобы тесты задавали исход.
+fn draw<T: Copy>(list: &[(T, f64)], rng: &mut u64) -> Option<T> {
+    let total: f64 = list.iter().map(|(_, w)| w).sum();
+    let mut r = next01(rng) * total;
+    for (x, w) in list {
+        if r < *w {
+            return Some(*x);
+        }
+        r -= w;
+    }
+    list.last().map(|(x, _)| *x)
+}
+
+fn next01(s: &mut u64) -> f64 {
+    *s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *s;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 11) as f64 / (1u64 << 53) as f64
+}
+
+/// Статус лент выбранных тем — в порядке feeds.rs.
+fn status(cache: &Cache) -> Vec<FeedStatus> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for f in FEEDS.iter().filter(|f| cache.topics.iter().any(|t| t == f.topic)) {
+        if !seen.insert(f.url) {
+            continue;
+        }
+        let topics: Vec<String> = FEEDS
+            .iter()
+            .filter(|g| g.url == f.url && cache.topics.iter().any(|t| t == g.topic))
+            .map(|g| g.topic.to_owned())
+            .collect();
+        let last = cache.fetched.get(f.url);
+        out.push(FeedStatus {
+            source: f.source.to_owned(),
+            lang: f.lang.to_owned(),
+            items: cache.items.iter().filter(|i| i.source == f.source && topics.contains(&i.topic)).count(),
+            topics,
+            at: last.map(|l| l.at),
+            ok: last.map(|l| l.ok),
+            next: cache.next.get(f.url).copied(),
+            weight: weight(&cache.sources, f.source),
+        });
+    }
+    out
 }
 
 fn now() -> i64 {
@@ -170,6 +287,8 @@ fn seed() -> u64 {
 static STATE: Mutex<Option<Cache>> = Mutex::new(None);
 /// Будильник потока: true — темы поменялись, пора качать, не дожидаясь срока.
 static WAKE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+/// Поток сейчас качает — для статуса в настройках.
+static BUSY: AtomicBool = AtomicBool::new(false);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -230,12 +349,14 @@ fn refresh() {
     if urls.is_empty() {
         return;
     }
+    BUSY.store(true, Ordering::Relaxed);
     let agent = agent();
     for url in urls {
         let entries = fetch(&agent, url);
         with_cache(|c| merge(c, url, entries.as_deref(), now()));
     }
     with_cache(|c| save(c));
+    BUSY.store(false, Ordering::Relaxed);
 }
 
 fn wake() {
@@ -257,15 +378,25 @@ pub fn start() {
     });
 }
 
+/// Запомнить темы; поменялись — сохранить и разбудить поток.
+fn topics_changed(c: &mut Cache, topics: &[String], t: i64) -> bool {
+    let changed = set_topics(c, topics, t);
+    if changed {
+        save(c);
+    }
+    changed
+}
+
 /// Новость для облачка по увлечениям пользователя или `None`, если рассказать нечего.
 /// Темы запоминаются локально: по ним фоновый поток решает, какие ленты качать.
+/// `weights` — веса тем из chatter: «больше такого» по теме.
 #[tauri::command]
-pub fn news_pick(topics: Vec<String>) -> Option<NewsItem> {
+pub fn news_pick(topics: Vec<String>, weights: Option<BTreeMap<String, f64>>) -> Option<NewsItem> {
     let (item, changed) = with_cache(|c| {
         let t = now();
-        let changed = set_topics(c, &topics, t);
-        let item = pick(c, t, seed());
-        if changed || item.is_some() {
+        let changed = topics_changed(c, &topics, t);
+        let item = pick(c, t, seed(), &weights.unwrap_or_default());
+        if item.is_some() {
             save(c);
         }
         (item, changed)
@@ -274,6 +405,44 @@ pub fn news_pick(topics: Vec<String>) -> Option<NewsItem> {
         wake();
     }
     item
+}
+
+/// Темы поменялись в настройках — качать новые ленты сразу, не дожидаясь облачка.
+#[tauri::command]
+pub fn news_topics(topics: Vec<String>) {
+    if with_cache(|c| topics_changed(c, &topics, now())) {
+        wake();
+    }
+}
+
+/// Лайк или диз на новость: источник станет чаще или реже.
+#[tauri::command]
+pub fn news_vote(source: String, up: bool) {
+    with_cache(|c| {
+        vote(c, &source, up);
+        save(c);
+    });
+}
+
+/// Статус лент для настроек.
+#[tauri::command]
+pub fn news_status() -> NewsStatus {
+    let feeds = with_cache(|c| status(c));
+    NewsStatus { busy: BUSY.load(Ordering::Relaxed), now: now(), feeds }
+}
+
+/// «Обновить сейчас»: снять сроки с лент, которые не трогали последние минуты, и разбудить поток.
+#[tauri::command]
+pub fn news_refresh() {
+    with_cache(|c| force(c, now()));
+    wake();
+}
+
+/// Сроки долой — кроме лент, скачанных только что: кнопку можно жать сколько угодно,
+/// а сайт получит не больше запроса в REFRESH_GAP.
+fn force(cache: &mut Cache, now: i64) {
+    let fetched = &cache.fetched;
+    cache.next.retain(|url, _| fetched.get(url).is_some_and(|f| now - f.at < REFRESH_GAP));
 }
 
 #[cfg(test)]
@@ -374,24 +543,106 @@ mod tests {
         c.items.push(item("аниме", "en", "https://a/en-new", NOW));
         c.items.push(item("аниме", "ru", "https://a/ru-old", NOW - 7200));
         c.items.push(item("аниме", "ru", "https://a/ru-new", NOW - 3600));
-        let order: Vec<String> = (0..3).map(|s| pick(&mut c, NOW, s).unwrap().link).collect();
+        // один источник — внутри него порядок строгий при любом зерне
+        let none = BTreeMap::new();
+        let order: Vec<String> = (0..3).map(|s| pick(&mut c, NOW, s, &none).unwrap().link).collect();
         assert_eq!(order, ["https://a/ru-new", "https://a/ru-old", "https://a/en-new"]);
-        assert_eq!(pick(&mut c, NOW, 0), None, "всё показано — молчим");
+        assert_eq!(pick(&mut c, NOW, 0, &none), None, "всё показано — молчим");
     }
 
     #[test]
-    fn pick_spreads_over_topics_and_skips_shared_links() {
-        let mut c = cache(&["наука", "животные"]);
-        c.items.push(item("наука", "ru", "https://n/whale", NOW));
-        c.items.push(item("животные", "ru", "https://n/whale", NOW));
-        c.items.push(item("наука", "ru", "https://n/atom", NOW - 60));
-        let first = pick(&mut c, NOW, 1).unwrap();
-        assert_eq!((first.topic.as_str(), first.link.as_str()), ("животные", "https://n/whale"));
-        // у животных больше нечего — выбор только из науки, и кита там не повторяем
-        let second = pick(&mut c, NOW, 1).unwrap();
-        assert_eq!((second.topic.as_str(), second.link.as_str()), ("наука", "https://n/atom"));
-        assert_eq!(pick(&mut c, NOW, 1), None);
-        assert_eq!(pick(&mut cache(&[]), NOW, 0), None);
+    fn pick_skips_shared_links() {
+        for seed in 0..20 {
+            let mut c = cache(&["наука", "животные"]);
+            c.items.push(item("наука", "ru", "https://n/whale", NOW));
+            c.items.push(item("животные", "ru", "https://n/whale", NOW));
+            c.items.push(item("наука", "ru", "https://n/atom", NOW - 60));
+            let mut links: Vec<String> =
+                std::iter::from_fn(|| pick(&mut c, NOW, seed, &BTreeMap::new())).map(|i| i.link).collect();
+            links.sort();
+            assert_eq!(links, ["https://n/atom", "https://n/whale"], "кит — один раз на обе темы");
+        }
+        assert_eq!(pick(&mut cache(&[]), NOW, 0, &BTreeMap::new()), None);
+    }
+
+    /// Сколько раз из 1000 зёрен первой выпадет новость источника `source`.
+    fn wins(setup: impl Fn() -> Cache, topic_w: &BTreeMap<String, f64>, source: &str) -> usize {
+        (0..1000).filter(|s| pick(&mut setup(), NOW, *s, topic_w).unwrap().source == source).count()
+    }
+
+    #[test]
+    fn votes_shift_sources() {
+        let two = |votes: &[(&str, bool)]| {
+            let mut c = cache(&["космос"]);
+            c.items.push(NewsItem { source: "Наш".into(), ..item("космос", "ru", "https://s/ru", NOW - 60) });
+            c.items.push(NewsItem { source: "Их".into(), ..item("космос", "en", "https://s/en", NOW) });
+            for (s, up) in votes {
+                vote(&mut c, s, *up);
+            }
+            c
+        };
+        let none = BTreeMap::new();
+        let ru = wins(|| two(&[]), &none, "Наш");
+        assert!((750..850).contains(&ru), "русский вчетверо чаще: {ru}");
+        let even = wins(|| two(&[("Наш", false), ("Наш", false)]), &none, "Наш");
+        assert!((430..570).contains(&even), "два диза — наравне с английским: {even}");
+        let liked = wins(|| two(&[("Их", true), ("Их", true), ("Их", true), ("Их", true)]), &none, "Их");
+        assert!(liked > 400, "лайки поднимают английский: {liked}");
+
+        let mut c = cache(&[]);
+        for _ in 0..10 {
+            vote(&mut c, "Шум", false);
+        }
+        assert_eq!(c.sources["Шум"], VOTE_MIN, "дизы не выключают источник совсем");
+        for _ in 0..20 {
+            vote(&mut c, "Шум", true);
+        }
+        assert_eq!(c.sources["Шум"], VOTE_MAX);
+    }
+
+    #[test]
+    fn topic_weights_shift_topics() {
+        let setup = || {
+            let mut c = cache(&["космос", "кино"]);
+            c.items.push(NewsItem { source: "Космос".into(), ..item("космос", "ru", "https://t/1", NOW) });
+            c.items.push(NewsItem { source: "Кино".into(), ..item("кино", "ru", "https://t/2", NOW) });
+            c
+        };
+        let even = wins(setup, &BTreeMap::new(), "Космос");
+        assert!((430..570).contains(&even), "без весов — поровну: {even}");
+        let w = BTreeMap::from([("космос".to_owned(), 4.0), ("кино".to_owned(), 0.25)]);
+        assert!(wins(setup, &w, "Космос") > 900);
+        let junk = BTreeMap::from([("космос".to_owned(), f64::NAN), ("кино".to_owned(), -3.0)]);
+        assert!((430..570).contains(&wins(setup, &junk, "Космос")), "мусор в весах не ломает выбор");
+    }
+
+    #[test]
+    fn status_groups_shared_feeds() {
+        let mut c = cache(&["кино", "сериалы"]);
+        assert!(status(&cache(&[])).is_empty());
+        let kino = |c: &Cache| status(c).into_iter().find(|f| f.source == "KinoNews").unwrap();
+        let fresh = kino(&c);
+        assert_eq!(fresh.topics, ["кино", "сериалы"], "общая лента — одна строка на обе темы");
+        assert_eq!((fresh.at, fresh.ok, fresh.next, fresh.items), (None, None, None, 0));
+
+        let entries = [entry("Стартовали съёмки сериала о подвиге ополчения", "https://k/1", Some(NOW))];
+        merge(&mut c, KINONEWS, Some(&entries), NOW);
+        let ok = kino(&c);
+        assert_eq!((ok.at, ok.ok, ok.next, ok.items), (Some(NOW), Some(true), Some(NOW + TTL_OK), 2));
+        merge(&mut c, KINONEWS, None, NOW + 60);
+        assert_eq!(kino(&c).ok, Some(false));
+        assert_eq!(kino(&c).items, 2, "неудача не стирает накопленное");
+        assert_eq!(status(&c).len(), due(&cache(&["кино", "сериалы"]), NOW).len(), "строка на каждую ленту");
+    }
+
+    #[test]
+    fn refresh_button_respects_gap() {
+        let mut c = cache(&["кино"]);
+        merge(&mut c, KINONEWS, Some(&[]), NOW);
+        force(&mut c, NOW + 60);
+        assert!(!due(&c, NOW + 60).contains(&KINONEWS), "только что качали — не дёргаем сайт");
+        force(&mut c, NOW + REFRESH_GAP);
+        assert!(due(&c, NOW + REFRESH_GAP).contains(&KINONEWS));
     }
 
     #[test]
@@ -411,9 +662,13 @@ mod tests {
         let mut full = cache(&["кино"]);
         full.items.push(item("кино", "ru", "https://k/1", NOW));
         full.shown.insert("https://k/0".into(), NOW);
+        vote(&mut full, "KinoNews", true);
+        merge(&mut full, KINONEWS, None, NOW);
         let back: Cache = serde_json::from_str(&serde_json::to_string(&full).unwrap()).unwrap();
         assert_eq!(back.items, full.items);
         assert_eq!(back.shown, full.shown);
+        assert_eq!(back.sources, full.sources);
+        assert_eq!(back.fetched, full.fetched);
     }
 
     /// Ручной прогон всех лент по сети: `cargo test -- --ignored live_feeds --nocapture`.
