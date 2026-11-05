@@ -9,6 +9,7 @@ mod hit;
 mod laser;
 mod menu;
 mod news;
+mod reviews;
 mod shake;
 mod store;
 mod tracker;
@@ -330,6 +331,7 @@ pub fn run() {
             store::load_state,
             store::save_state,
             wiki::wiki_today,
+            reviews::film_reviews,
             news::news_pick,
         ])
         .setup(move |app| {
