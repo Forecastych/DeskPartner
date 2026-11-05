@@ -6,11 +6,13 @@
   import * as chatter from './lib/chatter';
   import { feedBowl, fresh, isHungry, load, refill, save, starve, step, takeOut, type Belly } from './lib/hunger';
   import * as mouse from './lib/mouse';
+  import * as yarn from './lib/yarn';
   import * as roam from './lib/roam';
-  import { parse, serialize, type Chatter, type HunterArea, type Settings } from './lib/settings';
+  import { parse, serialize, type Chatter, type HunterArea, type Settings, type Topic } from './lib/settings';
   import * as sleepy from './lib/sleep';
   import { ANIMS, BOWL_X, bowlLeft, draw, fatOn, flip, ground, hitMask, onBowl, SCRUFF_AT, SIZE, type AnimName, type Frame } from './lib/sprite';
   import { localLegacy, memoryStore, open, tauriBackend, type Store } from './lib/store';
+  import * as wiki from './lib/wiki';
 
   const PETTED_MS = 1500;
   /** Поза отдыха держится от 2 до 5 минут, потом кошка может перелечь. */
@@ -30,6 +32,9 @@
   /** Охотник: мышь пробегает раз в HUNT_MIN..HUNT_MAX мс, когда кошка свободна. */
   const HUNT_MIN = 15 * 60_000;
   const HUNT_MAX = 40 * 60_000;
+  /** Клубок: раз в YARN_MIN..YARN_MAX мс, когда кошка свободна и мыши нет. */
+  const YARN_MIN = 60 * 60_000;
+  const YARN_MAX = 120 * 60_000;
   /** Вернулась из-за края за мышью — столько облизывается. */
   const LICK_MS = 3000;
   /** Полки внутри окон перечитываются не чаще: детей у окон много, а мышь бегает долго. */
@@ -45,6 +50,8 @@
   const SENSES_MS = 2000;
   /** Голод пишется на диск раз в минуту и на каждом событии: упадёт программа — потеряется не больше минуты. */
   const SAVE_MS = 60_000;
+  /** Википедия не ответила — следующая попытка через час: факты не срочные. */
+  const WIKI_RETRY_MS = 60 * 60_000;
   /** Пока кошки нет на экране, проверять, не вернулась ли, раз в секунду. */
   const AWAY_TICK_MS = 1000;
   /** С лежаком засыпать уходит в него чаще, чем куда-то ещё. */
@@ -136,6 +143,14 @@
   /** Разговорчивость из настроек и что кошка уже наговорила. */
   let chatterLevel: Chatter = 'sometimes';
   let talk: chatter.Talk = chatter.fresh(Date.now(), chatterLevel, Math.random);
+  /** О чём рассказывать факты; пусто — фактов нет. */
+  let topics: Topic[] = [];
+  /** Факты «В этот день» по темам — вперёд встроенных; пусто, пока Википедия не ответила. */
+  let wikiFacts: Partial<Record<Topic, string[]>> = {};
+  /** За какой день wikiFacts; другой — пора спросить снова. */
+  let wikiDay = '';
+  /** Раньше этого не спрашиваем: идёт запрос или сети не было — ждём, а не долбим. */
+  let wikiNext = 0;
   /** Облачко висит до этих пор; 0 — молчит. */
   let speakingUntil = 0;
   /** Облачко вызвано из трея dev-сборки: висит, даже если кошке не до разговоров. */
@@ -176,6 +191,11 @@
   let nextHunt = 0;
   /** Мышь вызвана из трея dev-сборки: выбегает, как только кошка дома и не спит, — без ожидания безделья. */
   let huntNow = false;
+  /** Галочка «Клубок»; игра с ним (null — нет); когда вынести следующий; вызван из трея dev-сборки. */
+  let yarnOn = false;
+  let game: yarn.Game | null = null;
+  let nextYarn = 0;
+  let yarnNow = false;
   /** Верхние кромки рамок внутри окон — полки для мыши на весь экран. */
   let shelves: roam.Ledge[] = [];
   let lastShelves = 0;
@@ -393,7 +413,7 @@
     // Уход и возвращение сверяются с голодом и сном каждый кадр, а не только по событиям:
     // так их не потерять ни при запуске, ни при побудке, ни при «Новом котике».
     // несомую мир не двигает: уйти за край или к миске она успеет, когда отпустят
-    if (pet && world && !carried && !mouse.owns(hunt)) {
+    if (pet && world && !carried && !mouse.owns(hunt) && !yarn.owns(game)) {
       if (!away()) {
         if (pet.move === 'out') comeBack(now);
       } else if (pet.move !== 'out' && pet.exit === 0) pet = roam.leave(pet, world);
@@ -422,10 +442,36 @@
     return hunterOn && !!pet && !!world && !carried && !holding && dot === null && !away() && sleepy.mood(nap) === 'awake' && now >= eatUntil;
   }
 
+  /** Играть с клубком можно: как с мышью, только ещё и сытой — голодная идёт к миске, а не играет. */
+  function canYarn(now: number): boolean {
+    return (
+      yarnOn &&
+      !!pet &&
+      !!world &&
+      !carried &&
+      !holding &&
+      dot === null &&
+      !away() &&
+      sleepy.mood(nap) === 'awake' &&
+      now >= eatUntil &&
+      !isHungry(belly) &&
+      !mealPending
+    );
+  }
+
   /** Пустить мышь: кошка стоит без дела — не голодна, не умывается, не идёт спать в лежак. */
   function readyToHunt(now: number): boolean {
+    return canHunt(now) && idle(now);
+  }
+
+  /** Вынести клубок: так же без дела, и мыши нет — у них одно окно. */
+  function readyToYarn(now: number): boolean {
+    return canYarn(now) && idle(now) && !hunt;
+  }
+
+  /** Стоит без дела: не голодна, не умывается, не идёт спать в лежак, не гладят. */
+  function idle(now: number): boolean {
     return (
-      canHunt(now) &&
       pet!.move === 'still' &&
       !pet!.hunt &&
       !roam.onStrip(pet!) &&
@@ -438,12 +484,14 @@
   }
 
   const huntGap = () => HUNT_MIN + Math.random() * (HUNT_MAX - HUNT_MIN);
+  const yarnGap = () => YARN_MIN + Math.random() * (YARN_MAX - YARN_MIN);
 
-  /** Мышь в окно "mouse": где и что делает; null — спрятать. Шлём только перемены. */
+  /** Мышь или клубок в окно "mouse": где и что делает; null — спрятать. Шлём только перемены. */
   function tellMouse() {
-    const v = mouse.view(hunt);
-    const at = v && { x: Math.round(v.x), bottom: Math.round(v.y), anim: v.anim, facing: v.facing };
-    const key = at ? `${at.x} ${at.bottom} ${at.anim} ${at.facing}` : '';
+    const v = mouse.view(hunt) ?? yarn.view(game, world);
+    const frame = v && 'frame' in v ? v.frame : undefined;
+    const at = v && { x: Math.round(v.x), bottom: Math.round(v.y), anim: v.anim, facing: v.facing, frame };
+    const key = at ? `${at.x} ${at.bottom} ${at.anim} ${at.facing} ${frame}` : '';
     if (key === lastMouse) return;
     lastMouse = key;
     emitTo('mouse', 'mouse', at).catch(console.error);
@@ -465,6 +513,12 @@
       if (pet.move === 'out') return null;
       if (pet.move === 'still') return 'stand';
       return hunt.phase === 'follow' && pet.move === 'walk' ? 'run' : pet.move;
+    }
+    // с клубком: припадает перед ударом, за укатившимся — бегом
+    if (pet && game && yarn.owns(game)) {
+      if (pet.move === 'out') return null;
+      if (pet.move === 'still') return yarn.pose(game);
+      return yarn.running(game) && pet.move === 'walk' ? 'run' : pet.move;
     }
     // в пути — только ходьба, прыжок или падение, чем бы ни была занята голова
     if (pet && pet.move !== 'still' && pet.move !== 'out') return pet.move;
@@ -554,6 +608,7 @@
       !holding &&
       !pet.hunt &&
       !mouse.owns(hunt) &&
+      !yarn.owns(game) &&
       pet.move === 'still' &&
       !away() &&
       sleepy.mood(nap) === 'awake'
@@ -567,6 +622,7 @@
       return;
     }
     if (frozen || !senses || !head) return;
+    askWiki(now);
     const [next, line] = chatter.say(talk, moment(now, senses), chatterLevel, Math.random);
     talk = next;
     if (line) speak(line.text, now);
@@ -580,7 +636,25 @@
       today: s.active_today_secs,
       hungry: isHungry(belly) && !mealPending,
       free: free(),
+      topics,
+      extra: wikiFacts,
     };
+  }
+
+  /**
+   * События дня из Википедии, раз в день (Rust кэширует ответ на диске). Тем не выбрано — в сеть
+   * не ходим вовсе. Нет сети — молча живём на встроенном запасе и пробуем снова через час.
+   */
+  function askWiki(now: number) {
+    const day = new Date(now).toDateString();
+    if (!topics.length || day === wikiDay || now < wikiNext) return;
+    wikiNext = now + WIKI_RETRY_MS;
+    invoke<wiki.WikiEvent[]>('wiki_today')
+      .then((events) => {
+        wikiFacts = wiki.sort(events);
+        wikiDay = day;
+      })
+      .catch((e) => console.warn(e));
   }
 
   function speak(text: string, now: number) {
@@ -641,10 +715,17 @@
     const now = Date.now();
     const dt = now - lastMove;
     lastMove = now;
-    if (!hunt && pet && world && now >= nextHunt && (huntNow ? canHunt(now) && pet.move !== 'out' : readyToHunt(now))) {
+    if (!hunt && !game && pet && world && now >= nextHunt && (huntNow ? canHunt(now) && pet.move !== 'out' : readyToHunt(now))) {
       hunt = mouse.start(mouse.arena(world, hunterArea, shelves), now, Math.random);
       huntNow = false;
       lastShelves = 0;
+    }
+    if (!game && !hunt && pet && world && now >= nextYarn && (yarnNow ? canYarn(now) && pet.move !== 'out' : readyToYarn(now))) {
+      const started = yarn.start(world, pet, now);
+      // внешних краёв нет — клубок выносить неоткуда, попробует в следующий раз
+      if (started) [game, pet] = started;
+      else nextYarn = now + yarnGap();
+      yarnNow = false;
     }
     const was = pet && `${pet.move} ${pet.hunt?.mode}`;
     // мышь бегает и пока кошку несут: погоню это прерывает, но мышь удирает своим ходом
@@ -666,6 +747,19 @@
       if (hunt.phase === 'done') {
         hunt = null;
         nextHunt = now + huntGap();
+      }
+    }
+    // клубок так же: прервали — докатывается сам, кошкой дальше правит приложение
+    if (game && pet && world) {
+      if (yarn.owns(game) && !canYarn(now)) game = yarn.drop(game, now);
+      const playing = yarn.owns(game);
+      let e: roam.RoamEvent | null;
+      let p: roam.Pet;
+      [game, p, e] = yarn.tick(game, world, pet, now, dt, Math.random);
+      if (playing) [pet, event, ruled] = [p, e, true];
+      if (game.phase === 'done') {
+        game = null;
+        nextYarn = now + yarnGap();
       }
     }
     tellMouse();
@@ -809,6 +903,10 @@
     if (s.hunter && !hunterOn) nextHunt = Date.now() + huntGap();
     hunterOn = s.hunter;
     hunterArea = s.hunterArea;
+    // клубок так же: включили — не сразу, выключили — укатится сам (move: canYarn)
+    if (s.yarn && !yarnOn) nextYarn = Date.now() + yarnGap();
+    yarnOn = s.yarn;
+    topics = s.topics;
     if (s.chatter !== chatterLevel) {
       chatterLevel = s.chatter;
       talk = chatter.retime(talk, chatterLevel, Date.now(), Math.random);
@@ -819,7 +917,7 @@
   }
 
   /** Галочка в ПКМ-меню: сохранить, применить и показать открытому окну настроек. */
-  function toggle(field: 'feeder' | 'bed' | 'hideFromCapture' | 'hunter' | 'hunterArea') {
+  function toggle(field: 'feeder' | 'bed' | 'hideFromCapture' | 'hunter' | 'hunterArea' | 'yarn') {
     if (frozen) return;
     const s = parse(store.get('settings'));
     if (field === 'hunterArea') s.hunterArea = s.hunterArea === 'screen' ? 'taskbar' : 'screen';
@@ -840,6 +938,7 @@
       { id: 'hunter', text: 'Охотник', checked: s.hunter, hint: 'иногда пробегает мышь' },
       // в меню нет радиокнопок: область — галочкой, снятая — панель задач
       { id: 'hunterArea', text: 'Мышь по всему экрану', checked: s.hunterArea === 'screen', hint: 'иначе — по панели задач' },
+      { id: 'yarn', text: 'Клубок', checked: s.yarn, hint: 'раз в час-два катает по панели задач' },
       { separator: true },
       { id: 'settings', text: 'Настройки…' },
     ];
@@ -847,7 +946,7 @@
   }
 
   function menuPick(id: string) {
-    if (id === 'feeder' || id === 'bed' || id === 'hideFromCapture' || id === 'hunter' || id === 'hunterArea') toggle(id);
+    if (id === 'feeder' || id === 'bed' || id === 'hideFromCapture' || id === 'hunter' || id === 'hunterArea' || id === 'yarn') toggle(id);
     else if (id === 'laser') invoke('set_laser', { on: dot === null }).catch(console.error);
     else if (id === 'settings') invoke('open_settings').catch(console.error);
   }
@@ -878,9 +977,12 @@
       feederOn = settings.feeder;
       bedOn = settings.bed;
       chatterLevel = settings.chatter;
+      topics = settings.topics;
       hunterOn = settings.hunter;
       hunterArea = settings.hunterArea;
       nextHunt = Date.now() + huntGap();
+      yarnOn = settings.yarn;
+      nextYarn = Date.now() + yarnGap();
       talk = chatter.load(store.get('talk'), Date.now(), chatterLevel, Math.random);
       bowlPlace = loadPlace('bowl');
       bedPlace = loadPlace('bed');
@@ -950,6 +1052,12 @@
       nextHunt = 0;
       huntNow = true;
     });
+    // «Клубок» из трея dev-сборки: выключен — включает; выносит сразу, как кошка свободна
+    const unyarn = listen('dev-yarn', () => {
+      if (!yarnOn) toggle('yarn');
+      nextYarn = 0;
+      yarnNow = true;
+    });
     // окно настроек уже сохранило файл; кеш обновляем, чтобы следующая галочка в меню не затёрла его старьём
     // Слушаем своим окном: глобальный listen поймал бы и наш же emitTo('settings', 'settings').
     const win = getCurrentWebviewWindow();
@@ -997,7 +1105,7 @@
       clearTimeout(timer);
       clearInterval(moving);
       clearInterval(id);
-      const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter];
+      const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn];
       for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, undrag, unlaser, unlaserOff, unshoo]) off.then((f) => f());
     };
   });

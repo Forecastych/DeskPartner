@@ -4,12 +4,17 @@
   import { onMount } from 'svelte';
   import { draw, flip, MOUSE_ANIMS, SIZE } from './lib/sprite';
 
-  /** Что шлёт окно кошки каждый кадр погони: где мышь (физ. px, как в place_pet) и что делает; null — мыши нет. */
+  /**
+   * Что шлёт окно кошки каждый кадр погони или игры: где мышь или клубок (физ. px, как в place_pet)
+   * и что делает; null — никого нет.
+   */
   interface MouseState {
     x: number;
     bottom: number;
     anim: keyof typeof MOUSE_ANIMS;
     facing: 1 | -1;
+    /** Кадр задан снаружи (клубок крутится от пройденного пути); нет — по времени. */
+    frame?: number;
   }
 
   let canvas: HTMLCanvasElement;
@@ -26,7 +31,7 @@
       return;
     }
     const anim = MOUSE_ANIMS[state.anim];
-    const i = Math.floor(now / anim.ms) % anim.frames.length;
+    const i = (state.frame ?? Math.floor(now / anim.ms)) % anim.frames.length;
     const key = `${state.anim}:${i}:${state.facing}`;
     if (key === lastFrame) return;
     lastFrame = key;

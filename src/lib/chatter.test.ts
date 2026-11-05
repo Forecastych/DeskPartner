@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   CARE_SECS,
   duration,
+  FACT_RANGE,
+  FACT_WORK_EXTRA,
+  factGap,
   fresh,
   GAP_MS,
   HUNGRY_EVERY_MS,
@@ -19,6 +22,8 @@ import {
   shownFor,
   type Talk,
 } from './chatter';
+import { FACTS } from './facts';
+import { TOPICS } from './settings';
 
 const MIN = 60_000;
 /** Суббота, 7 ноября 2026, 14:00 — отдых, ни утро, ни ночь, ни пятница. */
@@ -32,7 +37,7 @@ function at(base: Date, ms: number): Date {
 }
 
 function moment(now: Date, over: Partial<Moment> = {}): Moment {
-  return { now, pause: true, session: 10 * 60, today: 30 * 60, hungry: false, free: true, ...over };
+  return { now, pause: true, session: 10 * 60, today: 30 * 60, hungry: false, free: true, topics: [], ...over };
 }
 
 /** Состояние, в котором случайная реплика уже подошла. */
@@ -188,6 +193,131 @@ describe('shoo and like', () => {
     const t = fresh(SAT.getTime(), 'quiet', mid);
     expect(t.next).toBe(Infinity);
     expect(retime(t, 'sometimes', SAT.getTime(), mid).next).toBe(SAT.getTime() + interval('sometimes', 0, mid));
+  });
+});
+
+/** Факт уже пора сказать: и срок фактов прошёл, и случайная реплика подошла. */
+function ripe(now: Date, over: Partial<Talk> = {}): Talk {
+  return { ...due(now), factIn: 0, ...over };
+}
+
+/** Повторяемая «случайность»: разные значения, но тест каждый раз один и тот же. */
+function seq(seed = 1): () => number {
+  let s = seed;
+  return () => (s = (s * 16807) % 2147483647) / 2147483647;
+}
+
+describe('facts', () => {
+  it('no topics — no facts, everything as before', () => {
+    const [, line] = say(ripe(SAT, { factIn: -FACT_WORK_EXTRA }), moment(SAT, { today: 0 }), 'sometimes', mid);
+    expect(line?.key).toBe('rest');
+  });
+
+  it('a fact is one of the usual random lines, about a chosen topic', () => {
+    expect(say(ripe(SAT, { next: SAT.getTime() + MIN }), moment(SAT, { topics: ['космос'] }), 'sometimes', mid)[1]).toBeNull();
+    const [t, line] = say(ripe(SAT), moment(SAT, { topics: ['космос'] }), 'sometimes', mid);
+    expect(line?.key).toBe('fact:космос');
+    expect(FACTS.космос).toContain(line?.text);
+    expect(t.factIn).toBe(factGap(mid));
+    expect(t.topic).toBe('космос');
+  });
+
+  it('waits at least an hour of clean time after the last fact', () => {
+    const r = () => 0; // самый короткий срок — ровно час
+    let [t, line] = say(ripe(SAT), moment(SAT, { today: 0, topics: ['кино'] }), 'sometimes', r);
+    expect(line?.key).toBe('fact:кино');
+    expect(t.factIn).toBe(FACT_RANGE[0]);
+    // пять часов на часах, но за компом — без секунды час: факта нет
+    let now = at(SAT, 5 * 60 * MIN);
+    [t, line] = say({ ...t, next: now.getTime() }, moment(now, { today: 3599, topics: ['кино'] }), 'sometimes', r);
+    expect(line?.key).not.toMatch(/^fact:/);
+    now = at(now, GAP_MS);
+    [, line] = say({ ...t, next: now.getTime() }, moment(now, { today: 3600, topics: ['кино'] }), 'sometimes', r);
+    expect(line?.key).toBe('fact:кино');
+  });
+
+  it('counts a new day from zero', () => {
+    let [t] = say(fresh(SAT.getTime(), 'sometimes', mid), moment(SAT, { pause: false, today: 20_000 }), 'sometimes', mid);
+    const before = t.factIn;
+    [t] = say(t, moment(at(SAT, 12 * 60 * MIN), { pause: false, today: 100 }), 'sometimes', mid);
+    expect(t.factIn).toBe(before - 100);
+  });
+
+  it('keeps rest topics out of work hours, work topics come rarely', () => {
+    const topics = ['кино', 'техника'] as const;
+    // срок у отдыха прошёл — в работе этого мало
+    expect(say(ripe(TUE), moment(TUE, { today: 0, topics }), 'sometimes', mid)[1]?.key).toBe('work');
+    for (let i = 0; i < 20; i++) {
+      const [, line] = say(ripe(TUE, { factIn: -FACT_WORK_EXTRA }), moment(TUE, { today: 0, topics }), 'sometimes', () => i / 20);
+      expect(line?.key).toBe('fact:техника');
+    }
+    // только темы отдыха — в работе фактов нет совсем
+    const [, line] = say(ripe(TUE, { factIn: -FACT_WORK_EXTRA }), moment(TUE, { today: 0, topics: ['кино'] }), 'sometimes', mid);
+    expect(line?.key).toBe('work');
+    // а в выходной — и кино
+    const keys = new Set(
+      Array.from({ length: 20 }, (_, i) => say(ripe(SAT), moment(SAT, { today: 0, topics }), 'sometimes', () => i / 20)[1]?.key),
+    );
+    expect(keys).toEqual(new Set(['fact:кино', 'fact:техника']));
+  });
+
+  it('does not repeat a fact until the topic runs out', () => {
+    const all = FACTS.теннис;
+    const rand = seq();
+    let t = ripe(SAT);
+    const said: string[] = [];
+    for (let i = 0; i < all.length + 1; i++) {
+      const now = at(SAT, i * 10 * MIN);
+      const [next, line] = say({ ...t, next: now.getTime(), factIn: 0 }, moment(now, { today: 0, topics: ['теннис'] }), 'sometimes', rand);
+      expect(line?.key).toBe('fact:теннис');
+      said.push(line!.text);
+      t = next;
+    }
+    expect(new Set(said.slice(0, all.length)).size).toBe(all.length);
+    // второй круг: сказанное по теме забыто, но подряд то же самое — нет
+    expect(said[all.length]).not.toBe(said[all.length - 1]);
+    expect(t.told).toEqual([said[all.length]]);
+  });
+
+  it('fresh facts of the day go first', () => {
+    const extra = { космос: ['Сегодня в 1957 году… (Википедия, CC BY-SA)'] };
+    const [t, line] = say(ripe(SAT), moment(SAT, { topics: ['космос'], extra }), 'sometimes', mid);
+    expect(line?.text).toBe(extra.космос[0]);
+    const [, again] = say({ ...t, next: 0, factIn: 0 }, moment(at(SAT, GAP_MS), { topics: ['космос'], extra }), 'sometimes', mid);
+    expect(FACTS.космос).toContain(again?.text);
+  });
+
+  it('petting after a fact asks for more of it, a shoo for less', () => {
+    const [t] = say(ripe(SAT), moment(SAT, { topics: ['кино'] }), 'sometimes', mid);
+    const soon = SAT.getTime() + 30_000;
+    const l = liked(t, soon);
+    expect(l.weights.кино).toBe(1.5);
+    expect(liked(l, soon).weights.кино).toBe(1.5); // одна реплика — одна прибавка
+    expect(liked(t, SAT.getTime() + 5 * MIN).weights.кино).toBeUndefined();
+    expect(shoo(t, 'sometimes', mid).weights.кино).toBe(0.5);
+    // смахнули не факт — вес темы не трогаем
+    const [plain] = say(due(SAT), moment(SAT), 'sometimes', mid);
+    expect(shoo({ ...plain, weights: { кино: 2 } }, 'sometimes', mid).weights).toEqual({ кино: 2 });
+  });
+
+  it('weights tip the choice of topic, within bounds', () => {
+    const topics = ['кино', 'космос'] as const;
+    const pick = (weights: Record<string, number>) => say(ripe(SAT, { weights }), moment(SAT, { topics }), 'sometimes', mid)[1]?.key;
+    expect(pick({})).toBe('fact:космос');
+    expect(pick({ кино: 4 })).toBe('fact:кино');
+    let t = ripe(SAT);
+    for (let i = 0; i < 10; i++) t = shoo({ ...t, topic: 'кино' }, 'sometimes', mid);
+    expect(t.weights.кино).toBe(0.25);
+    for (let i = 0; i < 20; i++) t = liked({ ...t, topic: 'кино', spoke: SAT.getTime() }, SAT.getTime());
+    expect(t.weights.кино).toBe(4);
+  });
+
+  it('every topic has a few short facts', () => {
+    for (const topic of TOPICS) {
+      expect(FACTS[topic].length, topic).toBeGreaterThanOrEqual(6);
+      expect(new Set(FACTS[topic]).size, topic).toBe(FACTS[topic].length);
+      for (const f of FACTS[topic]) expect(f.length, f).toBeLessThanOrEqual(90);
+    }
   });
 });
 

@@ -8,10 +8,15 @@ describe('настройки', () => {
     expect(d).toMatchObject({ mode: 'calm', chatter: 'sometimes', topics: [], tmdbKey: '' });
     // охотник выключен; включили — по панели задач
     expect(d).toMatchObject({ hunter: false, hunterArea: 'taskbar' });
+    // клубок тихий — включён сразу; у старых настроек без поля — тоже
+    expect(d.yarn).toBe(true);
+    expect(parse(JSON.stringify({ feeder: true })).yarn).toBe(true);
+    expect(parse(JSON.stringify({ yarn: false })).yarn).toBe(false);
+    expect(parse(JSON.stringify({ yarn: 'нет' })).yarn).toBe(true);
   });
 
   it('туда и обратно без потерь', () => {
-    const s = { ...defaults(), feeder: true, topics: ['космос', 'аниме'] as const, mode: 'pranks', tmdbKey: 'abc' } as const;
+    const s = { ...defaults(), feeder: true, topics: ['аниме', 'космос'] as const, mode: 'pranks', tmdbKey: 'abc' } as const;
     const copy = { ...s, topics: [...s.topics] };
     expect(parse(serialize(copy))).toEqual(copy);
   });
@@ -35,6 +40,6 @@ describe('настройки', () => {
   });
 
   it('темы — в порядке списка и без повторов', () => {
-    expect(parse(JSON.stringify({ topics: ['кино', 'космос', 'кино'] })).topics).toEqual(['космос', 'кино']);
+    expect(parse(JSON.stringify({ topics: ['космос', 'кино', 'космос'] })).topics).toEqual(['кино', 'космос']);
   });
 });

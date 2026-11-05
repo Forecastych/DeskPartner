@@ -30,6 +30,8 @@ export const PALETTE: Record<string, string> = {
   q: '#f0dcb8', // подушка в лежаке
   m: '#8d8478', // мышь
   n: '#6e665b', // мышь потемнее, у хвоста
+  y: '#e0607e', // клубок
+  Y: '#9c3550', // клубок: контур и нитки
 };
 
 /** Миска и корм в ней: клик сюда кормит, а не гладит. */
@@ -835,10 +837,21 @@ const mouseRun = (up: boolean): Frame =>
 /** Мышь сидит: тело на полу, хвост лежит. */
 const mouseSit = (body: Part): Frame => compose([['p...', '.pp.', '...p'], 5, 28], [body, 8, 23]);
 
+/** Клубок 8×8: нитки наискосок, кадр i сдвигает их — катится. */
+const yarnBall = (i: number): Part =>
+  ['..YYYY..', '.YyyyyY.', 'YyyyyyyY', 'YyyyyyyY', 'YyyyyyyY', 'YyyyyyyY', '.YyyyyY.', '..YYYY..'].map((r, y) =>
+    [...r].map((c, x) => (c === 'y' && (x + y + i) % 4 === 0 ? 'Y' : c)).join(''),
+  );
+
+/** Клубок на полу посередине кадра, нитка тянется влево — нарисован катящимся вправо. */
+const yarn = (i: number): Frame => compose([['...YY', 'YYY..'], 8, 30], [yarnBall(i), 12, 24]);
+
 /** Позы мыши; кликов она не ловит — маска у её окна всегда пустая. */
 export const MOUSE_ANIMS = {
   run: { ms: 90, frames: [mouseRun(true), mouseRun(false)] },
   sit: { ms: 400, frames: [mouseSit(MOUSE), mouseSit(MOUSE_SNIFF), mouseSit(MOUSE), mouseSit(MOUSE)] },
+  // клубок в том же окне; кадр ему задаёт пройденный путь, а не время — `ms` на всякий случай
+  yarn: { ms: 150, frames: [0, 1, 2, 3].map(yarn) },
 } satisfies Record<string, Anim>;
 
 /** Кадр окна лежака. */

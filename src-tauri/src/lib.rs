@@ -13,6 +13,7 @@ mod store;
 mod tracker;
 #[cfg(windows)]
 mod win;
+mod wiki;
 mod world;
 
 use hit::{Masks, SPRITE};
@@ -244,17 +245,20 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // проверить облачко, не дожидаясь паузы и срока; в релизную сборку не попадает
     #[cfg(debug_assertions)]
     menu.insert(&MenuItem::with_id(app, "dev-say", "Сказать что-нибудь (dev)", true, None::<&str>)?, 0)?;
-    // проверить поход к миске, не дожидаясь четырёх часов голода
+    // проверить поход к миске, не дожидаясь двух часов голода
     #[cfg(debug_assertions)]
     menu.insert(&MenuItem::with_id(app, "dev-hungry", "Проголодаться (dev)", true, None::<&str>)?, 1)?;
     // запустить погоню за мышью сейчас, не дожидаясь срока; охотник выключен — включит
     #[cfg(debug_assertions)]
     menu.insert(&MenuItem::with_id(app, "dev-hunter", "Охотник (dev)", true, None::<&str>)?, 2)?;
+    // вынести клубок сейчас; выключен — включит
+    #[cfg(debug_assertions)]
+    menu.insert(&MenuItem::with_id(app, "dev-yarn", "Клубок (dev)", true, None::<&str>)?, 3)?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("DeskPartner")
         .menu(&menu)
         .on_menu_event(|app, e| match e.id().as_ref() {
-            id @ ("call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter") => {
+            id @ ("call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn") => {
                 if let Err(err) = app.emit_to("pet", id, ()) {
                     eprintln!("{id}: {err}");
                 }
@@ -321,6 +325,7 @@ pub fn run() {
             store::set_data_dir,
             store::load_state,
             store::save_state,
+            wiki::wiki_today,
         ])
         .setup(move |app| {
             #[cfg(windows)]

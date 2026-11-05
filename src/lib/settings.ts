@@ -2,7 +2,32 @@
 // По умолчанию — осторожная версия: всё, что лезет в игры, браузер или сеть, выключено.
 // Исключение — «прятать от записи экрана»: питомец в чужом скриншоте выдаёт больше, чем хотелось бы.
 
-export const TOPICS = ['футбол', 'космос', 'аниме', 'история', 'животные', 'кино', 'игры', 'музыка', 'наука', 'техника'] as const;
+export const TOPICS = [
+  'футбол',
+  'хоккей',
+  'баскетбол',
+  'теннис',
+  'формула 1',
+  'единоборства',
+  'киберспорт',
+  'игры',
+  'аниме',
+  'кино',
+  'сериалы',
+  'музыка',
+  'книги',
+  'космос',
+  'наука',
+  'техника',
+  'программирование',
+  'история',
+  'животные',
+  'природа',
+  'путешествия',
+  'еда',
+  'искусство',
+  'авто',
+] as const;
 export type Topic = (typeof TOPICS)[number];
 
 export const MODES = ['calm', 'pranks'] as const;
@@ -25,6 +50,8 @@ export interface Settings {
   /** «Охотник»: кошка гоняется за курсором, как за лазером, только без Ctrl. */
   hunter: boolean;
   hunterArea: HunterArea;
+  /** «Клубок»: раз в час-два кошка выносит из-за края клубок и пару минут катает его по полу. */
+  yarn: boolean;
   /** Пока только кошка; собака и дракон позже. */
   pet: 'cat';
   topics: Topic[];
@@ -47,6 +74,8 @@ export function defaults(): Settings {
     hideFromCapture: true,
     hunter: false,
     hunterArea: 'taskbar',
+    // клубок тихий — не носится и не мешает, поэтому включён сразу
+    yarn: true,
     pet: 'cat',
     topics: [],
     mode: 'calm',
@@ -82,6 +111,7 @@ export function parse(raw: string | null): Settings {
     hideFromCapture: bool(s.hideFromCapture, d.hideFromCapture),
     hunter: bool(s.hunter, d.hunter),
     hunterArea: oneOf(HUNTER_AREAS, s.hunterArea, d.hunterArea),
+    yarn: bool(s.yarn, d.yarn),
     pet: 'cat',
     topics: Array.isArray(s.topics) ? TOPICS.filter((t) => (s.topics as unknown[]).includes(t)) : d.topics,
     mode: oneOf(MODES, s.mode, d.mode),
