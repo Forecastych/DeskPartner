@@ -3,9 +3,12 @@
   import { emitTo, listen } from '@tauri-apps/api/event';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { onMount } from 'svelte';
+  import * as calls from './lib/call';
   import * as chatter from './lib/chatter';
   import { feedBowl, fresh, isHungry, load, refill, save, starve, step, takeOut, type Belly } from './lib/hunger';
   import * as mouse from './lib/mouse';
+  import * as movie from './lib/movie';
+  import { verdict, type Film, type Verdict } from './lib/reviews';
   import * as yarn from './lib/yarn';
   import * as roam from './lib/roam';
   import * as news from './lib/news';
@@ -80,6 +83,10 @@
     active_today_secs: number;
     /** Только в Windows: почему сейчас лучше не мешать; 'no' — можно. */
     quiet?: string;
+    /** Только в Windows: идёт ли видео (media.rs). */
+    media?: { watching: boolean; title: string; loud: boolean };
+    /** Только в Windows: идёт созвон — занят микрофон или камера, или Zoom показывает экран. */
+    call?: boolean;
   }
 
   /** Копится за всю жизнь программы; питомец сбежал — цифры остаются. */
@@ -171,6 +178,8 @@
   let forced = false;
   /** Последний ответ `senses`; null — Rust ещё не ответил. */
   let senses: Senses | null = null;
+  /** Прятки на созвоне: прячется сразу, выходит через calls.RETURN_MS тишины. */
+  let hide: calls.Hide = calls.fresh();
   /** Макушка кошки над серединой силуэта, физ. px: сюда облачко ставит хвостик. */
   let head: { x: number; top: number } | null = null;
 
@@ -180,6 +189,20 @@
   let tick = 0;
   let pettedUntil = 0;
   let humanIdle = false;
+  /** «Кино вместе»: сеанс, вердикт отзывов о нём и галочка «Подтягивать отзывы». */
+  let film: movie.Movie = movie.fresh();
+  let filmTitle = '';
+  let filmVerdict: Verdict = 'unknown';
+  let reviewsOn = false;
+  /** Вердикты по названию: один фильм — один запрос за жизнь программы (Rust ещё и кэширует на диске). */
+  const verdicts = new Map<string, Verdict>();
+  /** За краем она спит от скуки на фильме, а не в обиде: громкая сцена может её позвать. */
+  let filmNap = false;
+  /** Монитор фильма на этот сеанс (movie.screen); null — сеанса нет или место ещё не выбрано. */
+  let filmScreen: number | null = null;
+  /** Выглянула на громкой сцене: дойдёт до края экрана — спросит, что пропустила. */
+  let peekPending = false;
+  let lastFilm = Date.now();
   let seenHuman = false;
   let rest: AnimName = 'sit';
   let restUntil = 0;
@@ -355,13 +378,23 @@
     groomUntil = eatUntil + GROOM_MS;
   }
 
-  /** Кошке нечего делать на экране: ушла за едой, сбежала или досыпает в обиде. */
+  /** Кошке нечего делать на экране: ушла за едой, сбежала, досыпает в обиде или у человека созвон. */
   function away(): boolean {
-    return belly.gone || belly.away > 0 || sleepy.mood(nap) === 'away';
+    return belly.gone || belly.away > 0 || sleepy.mood(nap) === 'away' || onCall();
+  }
+
+  /**
+   * У человека созвон: кошка за краем, молчит, не играет и не мстит — чтобы не спалить его на
+   * демонстрации экрана. Сон и голод идут своим чередом: спящая уходит и досыпает там же.
+   */
+  function onCall(): boolean {
+    return calls.onCall(hide);
   }
 
   /** Вернулась из-за края — выспавшейся или сытой, всё равно сначала умывается. */
   function comeBack(now: number) {
+    // поела или простила, а созвон ещё идёт — выйдет, когда кончится (live: !away())
+    if (onCall()) return;
     if (pet && world) {
       pet = roam.enter(pet, world);
       groomOnArrival = true;
@@ -370,10 +403,78 @@
 
   /** Перебраться на другое место: посидеть у края пола или на окне, поспать — лучше на окне, а есть лежак — в нём. */
   function wander(kind: 'rest' | 'sleep') {
-    if (!pet || !world || pet.move === 'out' || away() || pet.hunt) return;
+    if (!pet || !world || pet.move === 'out' || away() || pet.hunt || film.active) return;
     const bed = kind === 'sleep' && bedOn && Math.random() < BED_SLEEP ? roam.bedAt(world, bedPlace) : null;
     bedBound = bed !== null;
     pet = roam.goTo(pet, world, bed ? { surface: bed.surface, x: bed.x } : roam.pickSpot(world, pet, kind, Math.random));
+  }
+
+  /** Смотрит кино: идёт в угол у края монитора с фильмом; уже там — сидит. */
+  function toSeat() {
+    if (!pet || !world || pet.move === 'out' || pet.hunt || bedBound) return;
+    filmScreen = movie.screen(world, pet, filmScreen);
+    const g = movie.seat(world, pet, filmScreen);
+    if (movie.seated(pet, g)) return;
+    if (pet.goal?.surface !== g.surface || pet.goal.x !== g.x) pet = roam.goTo(pet, world, g);
+  }
+
+  /**
+   * Фильм по сигналу из Rust: сеанс начался — молчит и садится в угол; заскучала — уходит спать
+   * за край; громкая сцена, пока она там от скуки, — выглядывает. Название уходит в сеть
+   * только с галочкой «Подтягивать отзывы».
+   */
+  function watch(now: number, s: Senses) {
+    const media = s.media;
+    const dt = now - lastFilm;
+    lastFilm = now;
+    const title = media?.watching ? media.title : filmTitle;
+    if (title !== filmTitle) {
+      filmTitle = title;
+      filmVerdict = 'unknown';
+      if (film.active) askReviews(title);
+    }
+    const [next, event] = movie.step(film, dt, !!media?.watching, filmVerdict, Math.random);
+    film = next;
+    if (event === 'start') {
+      if (speakingUntil) hush();
+      askReviews(filmTitle);
+    }
+    if (event === 'doze' && sleepy.mood(nap) === 'awake' && !carried) {
+      nap = sleepy.bored(nap);
+      filmNap = true;
+      persist(now);
+    }
+    if (event === 'end') {
+      peekPending = false;
+      filmScreen = null;
+    }
+    // уснула до фильма или в первые секунды сеанса — кино её будит, без обид; нудное — пусть спит
+    if (film.active && filmVerdict !== 'dull' && sleepy.mood(nap) === 'asleep' && !carried) {
+      nap = sleepy.stir(nap);
+      sleepPose = null;
+      persist(now);
+    }
+    if (film.active && media?.loud && filmNap && sleepy.mood(nap) === 'away') {
+      nap = sleepy.call(nap);
+      film = movie.awake(film);
+      filmNap = false;
+      peekPending = true;
+      persist(now);
+    }
+  }
+
+  /** Скучный ли фильм: только с галочкой отзывов и известным названием; ответ кэшируется. */
+  function askReviews(title: string) {
+    if (!reviewsOn || !title) return;
+    const known = verdicts.get(title);
+    if (known) return void (filmVerdict = known);
+    invoke<Film | null>('film_reviews', { title })
+      .then((f) => {
+        const v = verdict(f);
+        verdicts.set(title, v);
+        if (filmTitle === title) filmVerdict = v;
+      })
+      .catch((e) => console.warn(e));
   }
 
   /**
@@ -413,7 +514,10 @@
     // поела где-то там
     if (event === 'return') comeBack(now);
 
-    const [rested, mood] = sleepy.step(nap, dt, humanIdle);
+    // пока смотрит кино, сама не устаёт: когда уснуть на фильме, решает movie.ts. Видео уже
+    // играет, но сеанс ещё не засчитан (START_MS) — тоже: иначе успеет уйти спать на лежак
+    const watching = (film.active || !!senses?.media?.watching) && sleepy.mood(nap) === 'awake';
+    const [rested, mood] = watching ? [nap, null] : sleepy.step(nap, dt, humanIdle);
     nap = rested;
     if (mood === 'sleep') {
       sleepPose = pick(SLEEPS);
@@ -422,7 +526,12 @@
     if (mood === 'doze') sleepPose = pick(DOZES);
     // полный сон — не меньше NAP_MS, по кошачьим меркам долго: проснувшись, умывается
     if (mood === 'wake') groomUntil = now + GROOM_MS;
-    if (mood === 'return') comeBack(now);
+    if (mood === 'return') {
+      comeBack(now);
+      // выспалась за краем посреди фильма — досматривает
+      if (filmNap) film = movie.awake(film);
+      filmNap = false;
+    }
 
     // Уход и возвращение сверяются с голодом и сном каждый кадр, а не только по событиям:
     // так их не потерять ни при запуске, ни при побудке, ни при «Новом котике».
@@ -435,6 +544,7 @@
       if (roam.onStrip(pet) && pet.move === 'still' && sleepy.mood(nap) !== 'asleep') wander('rest');
       // голодная и бодрая — идёт к миске; спящую голод не будит
       if ((isHungry(belly) || mealPending) && sleepy.mood(nap) === 'awake') toBowl();
+      else if (film.active && sleepy.mood(nap) === 'awake' && !away()) toSeat();
       // разбудили — про лежак забыла до следующего сна
       if (bedBound && sleepy.mood(nap) === 'asleep') toBed();
       else bedBound = false;
@@ -453,7 +563,18 @@
 
   /** Гоняться за мышью можно: охотник включён, кошка дома, бодрая, не ест, не в руках и лазер не светит. */
   function canHunt(now: number): boolean {
-    return hunterOn && !!pet && !!world && !carried && !holding && dot === null && !away() && sleepy.mood(nap) === 'awake' && now >= eatUntil;
+    return (
+      hunterOn &&
+      !!pet &&
+      !!world &&
+      !carried &&
+      !holding &&
+      dot === null &&
+      !film.active &&
+      !away() &&
+      sleepy.mood(nap) === 'awake' &&
+      now >= eatUntil
+    );
   }
 
   /** Играть с клубком можно: как с мышью, только ещё и сытой — голодная идёт к миске, а не играет. */
@@ -465,6 +586,7 @@
       !carried &&
       !holding &&
       dot === null &&
+      !film.active &&
       !away() &&
       sleepy.mood(nap) === 'awake' &&
       now >= eatUntil &&
@@ -537,6 +659,8 @@
     // в пути — только ходьба, прыжок или падение, чем бы ни была занята голова
     if (pet && pet.move !== 'still' && pet.move !== 'out') return pet.move;
     if (belly.gone || belly.away > 0) return null;
+    // на созвоне за краем не видно ничего, даже «з-з-з»
+    if (onCall()) return null;
     const mood = sleepy.mood(nap);
     // «з-з-з» — только из-за края; пока не дошла, идёт
     if (mood === 'away') return pet && pet.move !== 'out' ? 'walk' : 'zzz';
@@ -635,7 +759,7 @@
       if (now >= speakingUntil || (!free() && !forced)) hush();
       return;
     }
-    if (frozen || !senses || !head) return;
+    if (frozen || !senses || !head || film.active) return;
     askWiki(now);
     askNews(now);
     const [next, line] = chatter.say(talk, moment(now, senses), chatterLevel, Math.random);
@@ -836,6 +960,14 @@
       }
       // занесло — всё под лапами отбрасывает по ходу (laser.rs, окно "push"), на экране по-настоящему ничего не двигается
       if (event === 'skid') invoke('skid', { x: pet.x, y: pet.y, dx: pet.facing, dy: 0 }).catch(console.error);
+      if (event === 'arrived' && film.active && !mealPending) {
+        const m = roam.monitorOf(world, pet);
+        if (m) pet = { ...pet, facing: pet.x < (m.rect.left + m.rect.right) / 2 ? 1 : -1 };
+        if (peekPending) {
+          peekPending = false;
+          speak('А? Что я пропустила?', now);
+        }
+      }
       if (event === 'arrived' && groomOnArrival) {
         groomOnArrival = false;
         groomUntil = now + GROOM_MS;
@@ -928,6 +1060,8 @@
       carried = false;
       lastPlace = '';
       if (drop && pet && world) pet = roam.release(pet, world, drop.x, drop.bottom);
+      // посреди фильма перенесли на другой монитор — значит, кино там
+      if (film.active && pet && world) filmScreen = movie.petScreen(world, pet);
       lastMove = now;
       persist(now);
     } else if (!disturb(now)) {
@@ -962,6 +1096,7 @@
     if (s.yarn && !yarnOn) nextYarn = Date.now() + yarnGap();
     yarnOn = s.yarn;
     topics = s.topics;
+    reviewsOn = s.reviews;
     // ленты новых тем качаются сразу, а не когда кошка соберётся рассказать
     invoke('news_topics', { topics: [...topics] }).catch(console.error);
     if (s.chatter !== chatterLevel) {
@@ -1014,7 +1149,12 @@
       // кошка засыпала бы на NAP_MS прямо на старте. Скучать начинает, только увидев человека.
       senses = await invoke<Senses>('senses');
       seenHuman ||= !senses.idle;
-      humanIdle = seenHuman && senses.idle;
+      watch(Date.now(), senses);
+      // за фильмом человек не трогает мышь — это не «отошёл»
+      humanIdle = seenHuman && senses.idle && !film.active;
+      hide = calls.step(hide, senses.call ?? false, Date.now());
+      // созвон начался — облачко убрать сразу, даже проверочное из трея
+      if (onCall() && speakingUntil) hush();
     } catch (e) {
       console.error(e);
     }
@@ -1035,6 +1175,7 @@
       bedOn = settings.bed;
       chatterLevel = settings.chatter;
       topics = settings.topics;
+      reviewsOn = settings.reviews;
       hunterOn = settings.hunter;
       hunterArea = settings.hunterArea;
       nextHunt = Date.now() + huntGap();

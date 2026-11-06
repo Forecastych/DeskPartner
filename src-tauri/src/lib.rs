@@ -4,9 +4,11 @@
 //! "settings" — обычное окно настроек, открывается из трея и меню питомца.
 
 mod bubble;
+mod call;
 mod esc;
 mod hit;
 mod laser;
+mod media;
 mod menu;
 mod news;
 mod reviews;
@@ -19,6 +21,8 @@ mod wiki;
 mod world;
 
 use hit::{Masks, SPRITE};
+#[cfg(windows)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tracker::{Day, Now, Pace, Tracker};
@@ -43,6 +47,11 @@ struct Senses {
     tracker: Arc<Mutex<Tracker>>,
     /// Программа в активном окне на последнем тике.
     app: Mutex<Option<String>>,
+    /// Идёт ли видео — пишет поток media.rs.
+    media: Arc<Mutex<media::Media>>,
+    /// Идёт созвон (call.rs). Реестр и процессы опрашивает senses-tick, команда senses только читает.
+    #[cfg(windows)]
+    call: AtomicBool,
 }
 
 #[derive(serde::Serialize)]
@@ -55,6 +64,10 @@ struct SensesNow {
     active_today_secs: u64,
     #[cfg(windows)]
     quiet: win::Quiet,
+    media: media::Media,
+    /// Только да/нет: какие программы держат микрофон, фронтенду знать незачем.
+    #[cfg(windows)]
+    call: bool,
 }
 
 /// Маска текущего кадра того окна, которое её прислало.
@@ -85,23 +98,35 @@ fn senses(s: State<'_, Arc<Senses>>) -> SensesNow {
         active_today_secs: t.day.active_seconds,
         #[cfg(windows)]
         quiet: win::quiet(),
+        media: s.media.lock().unwrap().clone(),
+        #[cfg(windows)]
+        call: s.call.load(Ordering::Relaxed),
     }
 }
 
-/// Сырой ввод и тик раз в секунду: чистое время, программы, сессии.
+/// Созвон проверяется раз в столько тиков senses-tick (тик — секунда).
+#[cfg(windows)]
+const CALL_TICKS: u64 = 2;
+
+/// Сырой ввод и тик раз в секунду: чистое время, программы, сессии, созвон.
 #[cfg(windows)]
 fn start_senses(s: Arc<Senses>) {
     win::start_input(s.tracker.clone());
+    media::start(s.media.clone());
     std::thread::Builder::new()
         .name("senses-tick".into())
         .spawn(move || {
             let mut fg = win::Foreground::new();
-            loop {
+            for n in 0u64.. {
                 std::thread::sleep(std::time::Duration::from_secs(1));
                 let app = fg.current();
                 // закончившийся день пока выбрасываем: хранилища ещё нет
                 let _ = s.tracker.lock().unwrap().tick(&Now::local(), app.as_deref());
                 *s.app.lock().unwrap() = app;
+                // реестр и снимок процессов — через тик: фронтенд и сам спрашивает раз в 2 с
+                if n % CALL_TICKS == 0 {
+                    s.call.store(call::now(), Ordering::Relaxed);
+                }
             }
         })
         .expect("senses tick thread");
@@ -293,6 +318,9 @@ pub fn run() {
     let feel = Arc::new(Senses {
         tracker: Arc::new(Mutex::new(Tracker::new(Day::new(&now.date), &now))),
         app: Mutex::new(None),
+        media: Arc::new(Mutex::new(media::Media::default())),
+        #[cfg(windows)]
+        call: AtomicBool::new(false),
     });
     tauri::Builder::default()
         // второй экземпляр просто закрывается: два одинаковых питомца — уже не питомец

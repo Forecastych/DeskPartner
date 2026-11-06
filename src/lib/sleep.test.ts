@@ -3,6 +3,7 @@ import { MAX_STEP_MS } from './hunger';
 import {
   ANGRY_MS,
   AWAKE_MS,
+  bored,
   call,
   fresh,
   GROGGY_MS,
@@ -15,6 +16,7 @@ import {
   type Sleep,
   type SleepEvent,
   step,
+  stir,
 } from './sleep';
 
 const MIN = 60_000;
@@ -237,6 +239,39 @@ describe('зов из трея', () => {
   it('дома зов сон не трогает', () => {
     const s = sleeping(5 * MIN);
     expect(call(s)).toBe(s);
+  });
+});
+
+describe('заскучала на фильме', () => {
+  it('уходит за край без обид и возвращается выспавшейся', () => {
+    const s = bored({ ...fresh(), awake: 30 * MIN, wakes: 2 });
+    expect(mood(s)).toBe('away');
+    expect(poke(s)).toEqual([s, null]);
+    const [back, events] = run(s, NAP_MS);
+    expect(events).toEqual(['return']);
+    expect(back).toEqual(fresh());
+  });
+
+  it('громкая сцена зовёт раньше', () => {
+    expect(mood(call(bored(fresh())))).toBe('awake');
+  });
+});
+
+describe('разбудил фильм', () => {
+  it('выспавшаяся просыпается полностью', () => {
+    expect(stir({ ...sleeping(RESTED_MS), awake: AWAKE_MS, wakes: 1 })).toEqual(fresh());
+  });
+
+  it('недоспавшая просыпается без обид, но усталость остаётся', () => {
+    const s = stir({ ...sleeping(MIN), awake: AWAKE_MS });
+    expect(mood(s)).toBe('awake');
+    expect(s.wakes).toBe(0);
+    // фильм кончился — засыпает на первом же кадре
+    expect(step(s, 1, false)[1]).toBe('sleep');
+  });
+
+  it('бодрую, разбуженную и ушедшую не трогает', () => {
+    for (const s of [fresh(), { ...fresh(), wakes: 1, cranky: GROGGY_MS }, bored(fresh())]) expect(stir(s)).toBe(s);
   });
 });
 

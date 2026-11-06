@@ -172,6 +172,12 @@ pub fn exe_stem(path: &str) -> String {
     file.strip_suffix(".exe").or_else(|| file.strip_suffix(".EXE")).unwrap_or(file).to_string()
 }
 
+/// Полный путь к exe активного окна: по нему «Кино вместе» узнаёт плеер.
+pub fn foreground_path() -> Option<String> {
+    // SAFETY: только чтение пути процесса, хэндл закрывается внутри.
+    unsafe { foreground_exe() }
+}
+
 unsafe fn foreground_exe() -> Option<String> {
     let hwnd = GetForegroundWindow();
     if hwnd.is_null() {

@@ -109,7 +109,24 @@ export function call(s: Sleep): Sleep {
   return s.away > 0 ? { ...rested(s), away: 0 } : s;
 }
 
-const okNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+/**
+ * Заскучала на фильме: уходит спать за край, как обиженная, только без обид — побудки не копятся.
+ * Вернётся сама через NAP_MS выспавшейся; громкая сцена может позвать раньше (`call`).
+ */
+export function bored(s: Sleep): Sleep {
+  return { ...s, asleep: false, cranky: 0, wakes: 0, away: NAP_MS };
+}
+
+/**
+ * Разбудил фильм: не побудка, обид нет. Поспала RESTED_MS — сон засчитан полным; меньше — проснулась,
+ * но усталость (`awake`) осталась и догонит после титров. Не спящую дома не касается: тот же объект.
+ */
+export function stir(s: Sleep): Sleep {
+  if (!s.asleep || s.cranky > 0 || s.away > 0) return s;
+  return s.slept >= RESTED_MS ? rested(s) : { ...s, asleep: false, slept: 0 };
+}
+
+const okNum =(v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 
 /** Разбор из localStorage. Битое или подделанное начинает заново, а не ломает кошку посреди жизни. */
 export function load(raw: string | null): Sleep {
