@@ -86,6 +86,8 @@
   .cell {
     display: flex;
     flex-direction: column;
+    min-width: 0;
+    overflow-wrap: anywhere;
     gap: var(--ui-s1);
     padding: var(--ui-s2) var(--ui-s3);
     background: var(--ui-card);

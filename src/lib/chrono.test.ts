@@ -23,7 +23,7 @@ describe('chrono', () => {
 
   it('пока мало вместе — не решает', () => {
     expect(kind(day(6, 15, KNOWN_MS / 2))).toBeNull();
-    expect(words(null).value).toBe('присматривается');
+    expect(words(null).value).toBe('пока неясно');
   });
 
   it('жаворонок, голубь и сова по часам человека', () => {
