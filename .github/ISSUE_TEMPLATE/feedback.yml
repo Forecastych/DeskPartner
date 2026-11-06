@@ -1,39 +1,40 @@
-name: Отзыв
-description: Что понравилось, что мешает, чего не хватает
-title: "Отзыв: "
+name: Feedback / Отзыв
+description: What you liked, what gets in the way, what is missing / Что понравилось, что мешает, чего не хватает
+title: "Feedback: "
 labels: ["feedback"]
 body:
   - type: markdown
     attributes:
       value: |
-        Спасибо, что пишете! Заполните то, что хочется, остальное можно пропустить.
-        Если что-то сломалось, лучше выбрать шаблон «Баг».
+        Thanks for writing! Fill in whatever you like and skip the rest. If something broke, the "Bug" template works better.
+
+        Спасибо, что пишете! Заполните то, что хочется, остальное можно пропустить. Если что-то сломалось, лучше выбрать шаблон «Баг».
   - type: textarea
     id: liked
     attributes:
-      label: Что понравилось
-      placeholder: Например, как она спит на рамке окна
+      label: What you liked / Что понравилось
+      placeholder: For example, how she sleeps on a window frame
     validations:
       required: false
   - type: textarea
     id: annoying
     attributes:
-      label: Что мешает или бесит
-      placeholder: Что отвлекает от работы, что хочется выключить
+      label: What gets in the way / Что мешает или бесит
+      placeholder: What distracts you from work, what you would like to turn off
     validations:
       required: false
   - type: textarea
     id: idea
     attributes:
-      label: Идея
-      placeholder: Чему бы её ещё научить
+      label: Idea / Идея
+      placeholder: What else should she learn
     validations:
       required: false
   - type: input
     id: version
     attributes:
-      label: Версия программы
-      description: Необязательно. Есть в имени скачанного установщика и в списке установленных приложений Windows.
+      label: App version / Версия программы
+      description: Optional. It is in the installer file name and in the Windows list of installed apps. / Необязательно. Есть в имени установщика и в списке установленных приложений Windows.
       placeholder: "0.0.6"
     validations:
       required: false

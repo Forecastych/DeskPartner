@@ -114,7 +114,7 @@ fn hits(text: &str, list: &[&str]) -> bool {
         if k.contains(' ') || !k.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '$') {
             spaced.contains(&format!(" {}", k))
         } else if let Some(exact) = k.strip_suffix('$') {
-            ws.iter().any(|w| *w == exact)
+            ws.contains(&exact)
         } else {
             ws.iter().any(|w| w.starts_with(k))
         }

@@ -136,7 +136,7 @@ fn due(cache: &Cache, now: i64) -> Vec<&'static str> {
         .filter(|f| cache.active(f))
         .map(|f| f.url)
         .filter(|url| seen.insert(*url))
-        .filter(|url| cache.next.get(*url).is_none_or(|t| *t <= now))
+        .filter(|url| cache.next.get(*url).map_or(true, |t| *t <= now))
         .collect()
 }
 

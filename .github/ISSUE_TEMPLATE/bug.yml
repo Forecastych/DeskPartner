@@ -1,41 +1,44 @@
-name: Баг
-description: Что-то работает не так, как должно
-title: "Баг: "
+name: Bug / Баг
+description: Something works differently than it should / Что-то работает не так, как должно
+title: "Bug: "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
+        Thanks for reporting! The more precise the steps, the faster it can be reproduced and fixed.
+        You can drag a screenshot or a short video into any field. English or Russian, both are fine.
+
         Спасибо, что сообщаете! Чем точнее шаги, тем быстрее получится повторить и починить.
-        Скриншот или короткое видео можно просто перетащить в любое поле.
+        Скриншот или короткое видео можно просто перетащить в любое поле. Можно по-русски.
   - type: textarea
     id: steps
     attributes:
-      label: Что делали
-      description: По шагам, что происходило перед ошибкой.
+      label: What you did / Что делали
+      description: Step by step, what happened before the bug. / По шагам, что происходило перед ошибкой.
       placeholder: |
-        1. Развернул браузер на весь экран
-        2. Кошка спала на рамке окна
+        1. Maximized the browser
+        2. The cat was sleeping on a window frame
         3. ...
     validations:
       required: true
   - type: textarea
     id: expected
     attributes:
-      label: Что ожидали
+      label: What you expected / Что ожидали
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
-      label: Что вышло
+      label: What happened / Что вышло
     validations:
       required: true
   - type: input
     id: version
     attributes:
-      label: Версия программы
-      description: Есть в имени скачанного установщика и в списке установленных приложений Windows.
+      label: App version / Версия программы
+      description: It is in the installer file name and in the Windows list of installed apps. / Есть в имени установщика и в списке установленных приложений Windows.
       placeholder: "0.0.6"
     validations:
       required: true
@@ -46,23 +49,23 @@ body:
       options:
         - Windows 11
         - Windows 10
-        - Другая
+        - Other / Другая
     validations:
       required: true
   - type: dropdown
     id: monitors
     attributes:
-      label: Сколько мониторов
+      label: Monitors / Сколько мониторов
       options:
         - "1"
         - "2"
-        - "3 и больше"
+        - "3+"
     validations:
       required: true
   - type: textarea
     id: extra
     attributes:
-      label: Что ещё важно
-      description: Необязательно. Масштаб экрана, панель задач сбоку, игра или программа, где это случилось.
+      label: Anything else / Что ещё важно
+      description: Optional. Display scaling, taskbar on the side, the game or app where it happened. / Необязательно. Масштаб экрана, панель задач сбоку, игра или программа, где это случилось.
     validations:
       required: false

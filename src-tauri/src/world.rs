@@ -722,7 +722,7 @@ mod tests {
         let m = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1040));
         let bar = cover(1, rect(0, 1040, 1920, 1080));
         let video = cover(2, rect(0, 0, 1920, 1080));
-        assert_eq!(works(&[m.clone()], &[video, bar]), vec![rect(0, 0, 1920, 1080)]);
+        assert_eq!(works(std::slice::from_ref(&m), &[video, bar]), vec![rect(0, 0, 1920, 1080)]);
         // окно с полями больше монитора — тоже на весь экран
         assert_eq!(works(&[m], &[cover(3, rect(-8, -8, 1928, 1088)), bar]), vec![rect(0, 0, 1920, 1080)]);
     }
@@ -732,11 +732,11 @@ mod tests {
         let m = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1040));
         let bar = cover(1, rect(0, 1040, 1920, 1080));
         // видео ушло из фокуса — панель снова над ним
-        assert_eq!(works(&[m.clone()], &[bar, cover(2, rect(0, 0, 1920, 1080))]), vec![m.work]);
+        assert_eq!(works(std::slice::from_ref(&m), &[bar, cover(2, rect(0, 0, 1920, 1080))]), vec![m.work]);
         // развёрнутое окно до панели не достаёт, решает сама панель
-        assert_eq!(works(&[m.clone()], &[maxed(2, rect(0, 0, 1920, 1040), 1800), bar]), vec![m.work]);
+        assert_eq!(works(std::slice::from_ref(&m), &[maxed(2, rect(0, 0, 1920, 1040), 1800), bar]), vec![m.work]);
         // окошко поверх панели — не весь экран
-        assert_eq!(works(&[m.clone()], &[cover(3, rect(900, 1000, 1100, 1060)), cover(2, rect(0, 0, 1920, 1080)), bar]), vec![m.work]);
+        assert_eq!(works(std::slice::from_ref(&m), &[cover(3, rect(900, 1000, 1100, 1060)), cover(2, rect(0, 0, 1920, 1080)), bar]), vec![m.work]);
     }
 
     #[test]
@@ -747,7 +747,7 @@ mod tests {
         assert_eq!(works(&[a, b.clone()], &ws), vec![rect(0, 0, 1920, 1080), b.work]);
         // панели нет (автоскрытие) — менять нечего
         let c = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1080));
-        assert_eq!(works(&[c.clone()], &[cover(2, rect(0, 0, 1920, 1080))]), vec![c.work]);
+        assert_eq!(works(std::slice::from_ref(&c), &[cover(2, rect(0, 0, 1920, 1080))]), vec![c.work]);
     }
 
     /// Карта этой машины: `cargo test -- --ignored --nocapture`. Без заголовков — только геометрия.

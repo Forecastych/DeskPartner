@@ -4,7 +4,7 @@
   "version": "0.0.6",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
-  "description": "Пиксельный питомец, который живёт на краях экрана и рамках окон",
+  "description": "A pixel cat that lives on your screen edges and window frames",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

@@ -251,7 +251,7 @@ mod tests {
         let talking = e("C:#Discord.exe", Some(NOW - MIN), Some(0));
         let shumodav = e("C:#NVIDIA Broadcast#NVIDIA Broadcast UI.exe", Some(NOW - MIN), Some(0));
         assert!(!busy(&[], NOW));
-        assert!(!busy(&[idle.clone()], NOW));
+        assert!(!busy(std::slice::from_ref(&idle), NOW));
         assert!(busy(&[idle.clone(), talking.clone()], NOW));
         // шумодав держит микрофон весь день — это не созвон
         assert!(!busy(&[idle, shumodav.clone()], NOW));
