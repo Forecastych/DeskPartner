@@ -41,11 +41,6 @@ describe('newsLine', () => {
     expect(newsLine(item)).toBe('Пишут: Самая сильная за месяц вспышка произошла на Солнце (Лента.ру)');
   });
 
-  it('marks English news', () => {
-    const en: NewsItem = { ...item, title: 'Webb spots a new exoplanet', source: 'Space.com', lang: 'en' };
-    expect(newsLine(en)).toBe('Пишут (англ.): Webb spots a new exoplanet (Space.com)');
-  });
-
   it('cuts a long title', () => {
     const line = newsLine({ ...item, title: 'а'.repeat(300) });
     expect(line).toBe(`Пишут: ${'а'.repeat(MAX_TITLE - 1)}… (Лента.ру)`);

@@ -1,7 +1,7 @@
 // Новости по увлечениям: Rust качает ленты в фоне (src-tauri/src/news), фронт берёт
 // по одной командой news_pick и превращает в реплику для облачка.
 
-import { count, lang, t } from './i18n';
+import { count, t } from './i18n';
 
 export type Invoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -52,18 +52,11 @@ export async function pickNews(
 /** Длиннее заголовок обрезаем: облачко не должно разрастись во всю кошку. */
 export const MAX_TITLE = 120;
 
-/** Реплика для облачка: «Пишут: <заголовок> (Источник)»; новость не на языке интерфейса — с пометкой. */
+/** Реплика для облачка: «Пишут: <заголовок> (Источник)». Ленты — только на языке интерфейса. */
 export function newsLine(item: NewsItem): string {
-  const head = item.lang === lang() ? t('Пишут:', 'In the news:') : t('Пишут (англ.):', 'In the news (Russian):');
   const raw = item.title.trim();
   const title = raw.length > MAX_TITLE ? `${raw.slice(0, MAX_TITLE - 1).trimEnd()}…` : raw;
-  return `${head} ${title} (${item.source})`;
-}
-
-/** Пометка языка у ленты в настройках — только когда он не совпадает с языком интерфейса. */
-export function langMark(l: 'ru' | 'en'): string {
-  if (l === lang()) return '';
-  return l === 'en' ? t(' (англ.)', ' (English)') : t(' (рус.)', ' (Russian)');
+  return `${t('Пишут:', 'In the news:')} ${title} (${item.source})`;
 }
 
 /** Строка статуса лент из news_status: одна на адрес ленты. Время — unix, секунды. */

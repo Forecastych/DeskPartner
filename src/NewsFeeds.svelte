@@ -5,7 +5,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
   import { t } from './lib/i18n';
-  import { feedState, langMark, newsStatus, newsSummary, type NewsStatus } from './lib/news';
+  import { feedState, newsStatus, newsSummary, type NewsStatus } from './lib/news';
   import { topicName, type Topic } from './lib/settings';
   import { Button, Hint } from './ui';
 
@@ -52,7 +52,7 @@
     <ul class="feeds">
       {#each status.feeds as f (f.source + f.topics.join())}
         <li>
-          <span class="name">{f.source}{langMark(f.lang)}</span>
+          <span class="name">{f.source}</span>
           <span class="topics">· {f.topics.map((x) => topicName(x as Topic)).join(', ')}</span>
           <span class="state" class:bad={f.ok === false}>{feedState(f, status.now, status.busy)}</span>
         </li>
