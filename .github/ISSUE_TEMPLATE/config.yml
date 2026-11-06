@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  # ПРЕДПОЛОЖЕНИЕ: адрес сайта на GitHub Pages; поправить, если репозиторий назовётся иначе
+  - name: Отзыв без аккаунта GitHub
+    url: https://forecastych.github.io/DeskPartner/#reviews
+    about: Форма на сайте, вход не нужен.

@@ -1,0 +1,39 @@
+name: Отзыв
+description: Что понравилось, что мешает, чего не хватает
+title: "Отзыв: "
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо, что пишете! Заполните то, что хочется, остальное можно пропустить.
+        Если что-то сломалось, лучше выбрать шаблон «Баг».
+  - type: textarea
+    id: liked
+    attributes:
+      label: Что понравилось
+      placeholder: Например, как она спит на рамке окна
+    validations:
+      required: false
+  - type: textarea
+    id: annoying
+    attributes:
+      label: Что мешает или бесит
+      placeholder: Что отвлекает от работы, что хочется выключить
+    validations:
+      required: false
+  - type: textarea
+    id: idea
+    attributes:
+      label: Идея
+      placeholder: Чему бы её ещё научить
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Версия программы
+      description: Необязательно. Есть в имени скачанного установщика и в списке установленных приложений Windows.
+      placeholder: "0.0.6"
+    validations:
+      required: false

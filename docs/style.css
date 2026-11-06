@@ -1,0 +1,384 @@
+/* Пиксельный вид как в приложении: токены и рамка взяты из src/ui/tokens.css,
+   полоса заголовка, кнопки и разделы повторяют Dialog, Button и Section. */
+:root {
+  --ui-bg: #faf8f5;
+  --ui-card: #fffdf9;
+  --ui-soft: #f6e9df;
+  --ui-text: #2e2219;
+  --ui-muted: #76665a;
+  --ui-ink: #3b2a1e;
+  --ui-line: #e2d4c4;
+  --ui-accent: #a85a26;
+  --ui-accent-hi: #c4743a;
+  --ui-accent-lo: #7d3f17;
+  --ui-on-accent: #fff8ee;
+  --ui-drop: #d8c4ae;
+
+  --ui-b: 3px;
+  --ui-lift: 3px;
+  --ui-s1: 4px;
+  --ui-s2: 8px;
+  --ui-s3: 12px;
+  --ui-s4: 16px;
+  --ui-s5: 24px;
+
+  /* Только системные шрифты: ничего не качается */
+  --ui-font: 15px/1.5 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+  --ui-font-pixel: 'Cascadia Mono', Consolas, 'Lucida Console', 'DejaVu Sans Mono', monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ui-bg: #221c18;
+    --ui-card: #2e2621;
+    --ui-soft: #3a2d24;
+    --ui-text: #f0e7de;
+    --ui-muted: #ab9d91;
+    --ui-ink: #0f0a07;
+    --ui-line: #463a31;
+    --ui-accent: #e39a63;
+    --ui-accent-hi: #f0b585;
+    --ui-accent-lo: #b86d38;
+    --ui-on-accent: #221c18;
+    --ui-drop: #0a0705;
+  }
+}
+
+/* Пиксельная рамка: четыре полосы контура, пустые углы-ступеньки и жёсткая тень */
+.ui-px {
+  --edge: var(--ui-ink);
+  --drop: var(--ui-drop);
+  --lift: var(--ui-lift);
+  box-shadow:
+    0 calc(var(--ui-b) * -1) 0 0 var(--edge),
+    0 var(--ui-b) 0 0 var(--edge),
+    calc(var(--ui-b) * -1) 0 0 0 var(--edge),
+    var(--ui-b) 0 0 0 var(--edge),
+    calc(var(--ui-b) + var(--lift)) calc(var(--ui-b) + var(--lift)) 0 0 var(--drop);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font: var(--ui-font);
+  overflow-wrap: break-word;
+}
+
+.defs {
+  position: absolute;
+}
+
+img.px {
+  display: block;
+  image-rendering: pixelated;
+}
+
+a {
+  color: var(--ui-accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+a:hover {
+  color: var(--ui-accent-hi);
+}
+a:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+
+.muted {
+  color: var(--ui-muted);
+}
+
+/* Страница: столбец «окон». Зазоры больше контура с тенью, чтобы рамки не слипались */
+.page {
+  display: grid;
+  gap: 28px;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 28px 16px 8px;
+}
+
+/* Окно: как Dialog, но с пиксельными углами */
+.win {
+  margin: 0 calc(var(--ui-b) + var(--ui-lift)) 0 var(--ui-b);
+  background: var(--ui-card);
+}
+
+.bar {
+  display: flex;
+  gap: var(--ui-s2);
+  align-items: center;
+  height: 32px;
+  padding: 0 var(--ui-s3);
+  border-bottom: var(--ui-b) solid var(--ui-ink);
+  background: linear-gradient(var(--ui-accent-hi) 0 var(--ui-b), var(--ui-accent) var(--ui-b));
+  color: var(--ui-on-accent);
+  font: 700 13px var(--ui-font-pixel);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+}
+.paw {
+  flex: none;
+}
+
+.body {
+  padding: var(--ui-s4) 28px var(--ui-s5);
+}
+
+h1,
+h2 {
+  font-family: var(--ui-font-pixel);
+  font-weight: 700;
+}
+h1 {
+  margin: 0 0 var(--ui-s2);
+  font-size: 28px;
+  line-height: 1.2;
+}
+/* Заголовок раздела с пиксельным маркером, как Section */
+h2 {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: var(--ui-s1) 0 var(--ui-s3);
+  font-size: 17px;
+}
+h2::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: var(--ui-accent);
+  box-shadow: 3px 3px 0 var(--ui-drop);
+}
+/* в окне название уже в полосе заголовка – h2 остаётся для навигации диктора */
+.win h2 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+p {
+  margin: 0 0 var(--ui-s3);
+}
+
+/* Первое окно */
+.hero-body {
+  display: flex;
+  gap: var(--ui-s5);
+  align-items: flex-start;
+  padding-top: var(--ui-s5);
+}
+.hero-cat {
+  flex: none;
+  margin-top: var(--ui-s1);
+}
+.hero-text {
+  min-width: 0;
+}
+.lead {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-s3) var(--ui-s4);
+  align-items: center;
+  margin-top: var(--ui-s4);
+}
+.cta .muted {
+  font-size: 13px;
+}
+
+/* Кнопка как Button primary */
+.btn {
+  display: inline-block;
+  padding: 6px 16px;
+  border: 0;
+  font: 700 13px/1.4 var(--ui-font-pixel);
+  text-decoration: none;
+  cursor: pointer;
+}
+.btn.big {
+  padding: 10px 26px;
+  font-size: 16px;
+}
+.primary {
+  background: linear-gradient(to top, var(--ui-accent-lo) 0 var(--ui-b), var(--ui-accent) var(--ui-b));
+  color: var(--ui-on-accent);
+}
+.primary:hover {
+  background: linear-gradient(to top, var(--ui-accent) 0 var(--ui-b), var(--ui-accent-hi) var(--ui-b));
+  color: var(--ui-on-accent);
+}
+/* нажатие: кнопка садится на свою тень */
+.btn.ui-px:active {
+  --lift: 0px;
+  transform: translate(var(--ui-lift), var(--ui-lift));
+}
+.btn:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: calc(var(--ui-b) + 3px);
+}
+
+/* Позы */
+.poses {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 22px 20px;
+  margin: var(--ui-s1) 0 0;
+  padding: 0 var(--ui-lift) var(--ui-lift) var(--ui-b);
+  list-style: none;
+}
+.pose {
+  --lift: 0px;
+  --edge: var(--ui-line);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--ui-s3);
+  background: var(--ui-bg);
+}
+.stage {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  height: 96px;
+  margin-bottom: var(--ui-s2);
+  border-bottom: var(--ui-b) solid var(--ui-line);
+}
+.pose b {
+  font: 700 14px var(--ui-font-pixel);
+}
+.pose span {
+  color: var(--ui-muted);
+  font-size: 14px;
+}
+
+/* Приватность */
+.facts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.facts li {
+  position: relative;
+  margin: 0 0 var(--ui-s2);
+  padding-left: 22px;
+}
+.facts li::before {
+  content: '';
+  position: absolute;
+  top: 0.6em;
+  left: 2px;
+  width: 6px;
+  height: 6px;
+  background: var(--ui-accent);
+  box-shadow: 3px 3px 0 var(--ui-drop);
+}
+
+/* Отзывы */
+.form {
+  margin: var(--ui-s4) var(--ui-b) var(--ui-s4);
+}
+.note {
+  --lift: 0px;
+  --edge: var(--ui-line);
+  display: flex;
+  gap: var(--ui-s4);
+  align-items: flex-end;
+  padding: var(--ui-s3) var(--ui-s4);
+  background: var(--ui-soft);
+}
+.note p {
+  margin: 0;
+}
+.form.has-form {
+  --edge: var(--ui-ink);
+  box-shadow:
+    0 calc(var(--ui-b) * -1) 0 0 var(--edge),
+    0 var(--ui-b) 0 0 var(--edge),
+    calc(var(--ui-b) * -1) 0 0 0 var(--edge),
+    var(--ui-b) 0 0 0 var(--edge);
+  background: #fff;
+}
+.form iframe {
+  display: block;
+  width: 100%;
+  height: 1100px;
+  border: 0;
+}
+.bug {
+  margin: 0;
+}
+
+.foot {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--ui-s4) 16px 32px;
+  color: var(--ui-muted);
+  font-size: 13px;
+  text-align: center;
+}
+.foot p {
+  margin: 0;
+}
+
+/* Телефон */
+@media (max-width: 560px) {
+  .page {
+    gap: 24px;
+    padding-top: 20px;
+  }
+  .body {
+    padding: var(--ui-s4) var(--ui-s4) var(--ui-s5);
+  }
+  .hero-body {
+    flex-direction: column;
+    align-items: center;
+    gap: var(--ui-s3);
+    text-align: center;
+  }
+  .hero-cat {
+    width: 68px;
+    height: 80px;
+  }
+  .cta {
+    justify-content: center;
+  }
+  .note {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .poses {
+    grid-template-columns: 1fr;
+  }
+  .form iframe {
+    height: 1250px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn.ui-px:active {
+    transform: none;
+  }
+}

@@ -1,0 +1,68 @@
+name: Баг
+description: Что-то работает не так, как должно
+title: "Баг: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо, что сообщаете! Чем точнее шаги, тем быстрее получится повторить и починить.
+        Скриншот или короткое видео можно просто перетащить в любое поле.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Что делали
+      description: По шагам, что происходило перед ошибкой.
+      placeholder: |
+        1. Развернул браузер на весь экран
+        2. Кошка спала на рамке окна
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Что ожидали
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Что вышло
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версия программы
+      description: Есть в имени скачанного установщика и в списке установленных приложений Windows.
+      placeholder: "0.0.6"
+    validations:
+      required: true
+  - type: dropdown
+    id: windows
+    attributes:
+      label: Windows
+      options:
+        - Windows 11
+        - Windows 10
+        - Другая
+    validations:
+      required: true
+  - type: dropdown
+    id: monitors
+    attributes:
+      label: Сколько мониторов
+      options:
+        - "1"
+        - "2"
+        - "3 и больше"
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Что ещё важно
+      description: Необязательно. Масштаб экрана, панель задач сбоку, игра или программа, где это случилось.
+    validations:
+      required: false

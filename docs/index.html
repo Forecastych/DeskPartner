@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeskPartner – пиксельная кошка для рабочего стола</title>
+  <meta name="description" content="Пиксельная кошка для рабочего стола Windows: живёт на краях экрана и рамках окон и не мешает работать.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <svg width="0" height="0" class="defs" aria-hidden="true" focusable="false">
+    <!-- лапка из src/ui/pixels.ts -->
+    <symbol id="paw" viewBox="0 0 7 7">
+      <path fill="currentColor" d="M1 0h1v1h-1zM5 0h1v1h-1zM0 1h2v1h-2zM3 1h1v1h-1zM5 1h2v1h-2zM3 2h1v1h-1zM1 3h5v1h-5zM0 4h7v1h-7zM0 5h7v1h-7zM1 6h2v1h-2zM4 6h2v1h-2z"/>
+    </symbol>
+  </svg>
+
+  <main class="page">
+    <section class="win ui-px hero" aria-labelledby="t-hero">
+      <div class="bar" aria-hidden="true">
+        <svg class="paw" width="14" height="14"><use href="#paw"/></svg>
+        <span>Пиксельный питомец</span>
+      </div>
+      <div class="body hero-body">
+        <img class="px hero-cat" src="img/cat.svg" width="102" height="120" alt="Пиксельная серая кошка сидит и машет хвостом">
+        <div class="hero-text">
+          <h1 id="t-hero">DeskPartner</h1>
+          <p class="lead">Пиксельная кошка для рабочего стола Windows. Живёт на краях экрана и рамках окон и не мешает работать.</p>
+          <p>Гуляет по окнам, ест, спит и обижается, если её будить. Смотрит с вами кино, а на созвонах прячется. Гоняется за пиксельной мышью и играет с клубком.</p>
+          <div class="cta">
+            <a class="btn primary big ui-px" data-link="download">Скачать</a>
+            <span class="muted">Windows 10 и 11 · бесплатно для некоммерческого использования</span>
+          </div>
+          <noscript><p class="muted">Ссылки на этой странице работают только с включённым JavaScript.</p></noscript>
+        </div>
+      </div>
+    </section>
+
+    <section class="win ui-px" aria-labelledby="t-does">
+      <div class="bar" aria-hidden="true">
+        <svg class="paw" width="14" height="14"><use href="#paw"/></svg>
+        <span>Что она делает</span>
+      </div>
+      <div class="body">
+        <h2 id="t-does">Что она делает</h2>
+        <ul class="poses">
+          <li class="pose ui-px">
+            <div class="stage"><img class="px" src="img/eat.svg" width="48" height="54" alt=""></div>
+            <b>Ест</b>
+            <span>Проголодается – ждёт у миски. Не покормите – уйдёт искать еду сама.</span>
+          </li>
+          <li class="pose ui-px">
+            <div class="stage"><img class="px" src="img/sleep.svg" width="84" height="78" alt=""></div>
+            <b>Спит</b>
+            <span>Устала – сворачивается калачиком. Отошли от компьютера – уснёт сразу.</span>
+          </li>
+          <li class="pose ui-px">
+            <div class="stage"><img class="px" src="img/angry.svg" width="87" height="63" alt=""></div>
+            <b>Обижается</b>
+            <span>Разбудили недоспавшую – сначала вялая, потом шипит, а там и уйдёт за край экрана.</span>
+          </li>
+          <li class="pose ui-px">
+            <div class="stage"><img class="px" src="img/loaf.svg" width="51" height="51" alt=""></div>
+            <b>Смотрит кино</b>
+            <span>Включили фильм – садится в угол и смотрит с вами. На созвонах прячется.</span>
+          </li>
+          <li class="pose ui-px">
+            <div class="stage"><img class="px" src="img/hunt.svg" width="156" height="57" alt=""></div>
+            <b>Охотится</b>
+            <span>По окнам бегает нарисованная мышь, кошка гонится за ней до самого края экрана.</span>
+          </li>
+          <li class="pose ui-px">
+            <div class="stage"><img class="px" src="img/yarn.svg" width="96" height="60" alt=""></div>
+            <b>Играет с клубком</b>
+            <span>Иногда выкатывает клубок из-за края экрана и гоняет его по полу.</span>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="win ui-px" aria-labelledby="t-privacy">
+      <div class="bar" aria-hidden="true">
+        <svg class="paw" width="14" height="14"><use href="#paw"/></svg>
+        <span>Приватность</span>
+      </div>
+      <div class="body">
+        <h2 id="t-privacy">Приватность</h2>
+        <ul class="facts">
+          <li>Видит только рамки окон, <b>заголовки и содержимое не читает</b>.</li>
+          <li>О созвоне узнаёт по занятому микрофону или камере, но <b>звук не записывает</b>.</li>
+          <li>Из ваших данных в сеть уходят <b>только дата и язык</b>. Ни счётчиков, ни аналитики – и на этом сайте тоже.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="win ui-px" id="reviews" aria-labelledby="t-reviews">
+      <div class="bar" aria-hidden="true">
+        <svg class="paw" width="14" height="14"><use href="#paw"/></svg>
+        <span>Отзывы</span>
+      </div>
+      <div class="body">
+        <h2 id="t-reviews">Отзывы</h2>
+        <p>Что понравилось, что мешает, чего не хватает – напишите, это читают. Аккаунт не нужен.</p>
+        <div id="form" class="form">
+          <div class="note ui-px">
+            <img class="px" src="img/petted.svg" width="34" height="56" alt="">
+            <p><b>Форма скоро появится.</b><br>А пока кошка просто ждёт, когда её погладят.</p>
+          </div>
+        </div>
+        <p class="bug">Нашли баг? Есть аккаунт GitHub – <a data-link="issues">напишите в Issues</a>.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>DeskPartner · автор Forecastych · <a data-link="license">лицензия PolyForm Noncommercial 1.0.0</a> · <a data-link="repo">исходники на GitHub</a></p>
+  </footer>
+</body>
+</html>
