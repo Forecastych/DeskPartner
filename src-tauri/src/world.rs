@@ -25,7 +25,8 @@ pub struct Rect {
 #[serde(rename_all = "camelCase")]
 pub struct Monitor {
     pub rect: Rect,
-    /// Без панели задач и прочих пристыкованных панелей.
+    /// Без панели задач и прочих пристыкованных панелей. Панели закрыло окно на весь экран
+    /// (видео, игра без рамки) — весь монитор, см. [`fullscreen`].
     pub work: Rect,
     /// DPI / 96: 1.0 при масштабе 100%, 1.5 при 150%.
     pub scale: f64,
@@ -164,6 +165,33 @@ fn cut((l, r): (i32, i32), (cl, cr): (i32, i32)) -> impl Iterator<Item = (i32, i
     [(l, r.min(cl)), (l.max(cr), r)].into_iter().filter(|&(a, b)| b - a >= 1)
 }
 
+/// Windows не убирает панель задач из rcWork, когда её закрыло окно на весь экран, и пол
+/// повисал бы на её высоте. Решает верхнее по z-order окно, задевшее полосу панелей
+/// (монитор минус `work`): накрыло монитор целиком — `work` становится всем монитором.
+/// Окно на весь экран ушло из фокуса — панель снова выше него, и пол возвращается.
+pub fn fullscreen(monitors: Vec<Monitor>, windows: &[Win]) -> Vec<Monitor> {
+    monitors
+        .into_iter()
+        .map(|m| {
+            let (r, w) = (m.rect, m.work);
+            let in_band = |f: Rect| {
+                let (l, t, rr, b) = (f.left.max(r.left), f.top.max(r.top), f.right.min(r.right), f.bottom.min(r.bottom));
+                l < rr && t < b && !(w.left <= l && w.top <= t && rr <= w.right && b <= w.bottom)
+            };
+            let full = windows
+                .iter()
+                .map(|x| x.frame)
+                .find(|&f| in_band(f))
+                .is_some_and(|f| f.left <= r.left && f.top <= r.top && f.right >= r.right && f.bottom >= r.bottom);
+            if full {
+                Monitor { work: r, ..m }
+            } else {
+                m
+            }
+        })
+        .collect()
+}
+
 /// Мониторы, кромки и активное окно прямо сейчас. Фронтенд сам обрезает кромки экранами
 /// и проверяет, хватает ли над ними места.
 #[tauri::command]
@@ -171,7 +199,8 @@ pub fn world() -> World {
     let windows = sys::windows();
     // активное считаем, только если оно среди помех: так отсеиваются свои, свёрнутые и спрятанные
     let active = sys::active().filter(|&h| windows.iter().any(|w| w.hwnd == h));
-    World { monitors: sys::monitors(), ledges: ledges(&windows), active, strips: strips(&windows) }
+    let monitors = fullscreen(sys::monitors(), &windows);
+    World { monitors, ledges: ledges(&windows), active, strips: strips(&windows) }
 }
 
 /// Внутренние рамки окон для погони за мышью (см. [`shelves_of`]). Только прямоугольники
@@ -640,6 +669,48 @@ mod tests {
         // без активного окна — null, а не пропуск ключа
         let json = serde_json::to_string(&World::default()).unwrap();
         assert_eq!(json, r#"{"monitors":[],"ledges":[],"active":null,"strips":[]}"#);
+    }
+
+    fn screen(rect: Rect, work: Rect) -> Monitor {
+        Monitor { rect, work, scale: 1.0, primary: true }
+    }
+
+    /// `work` каждого монитора после [`fullscreen`].
+    fn works(ms: &[Monitor], ws: &[Win]) -> Vec<Rect> {
+        fullscreen(ms.to_vec(), ws).into_iter().map(|m| m.work).collect()
+    }
+
+    #[test]
+    fn fullscreen_window_above_taskbar_takes_whole_monitor() {
+        let m = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1040));
+        let bar = cover(1, rect(0, 1040, 1920, 1080));
+        let video = cover(2, rect(0, 0, 1920, 1080));
+        assert_eq!(works(&[m.clone()], &[video, bar]), vec![rect(0, 0, 1920, 1080)]);
+        // окно с полями больше монитора — тоже на весь экран
+        assert_eq!(works(&[m], &[cover(3, rect(-8, -8, 1928, 1088)), bar]), vec![rect(0, 0, 1920, 1080)]);
+    }
+
+    #[test]
+    fn taskbar_above_fullscreen_or_maximized_keeps_work() {
+        let m = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1040));
+        let bar = cover(1, rect(0, 1040, 1920, 1080));
+        // видео ушло из фокуса — панель снова над ним
+        assert_eq!(works(&[m.clone()], &[bar, cover(2, rect(0, 0, 1920, 1080))]), vec![m.work]);
+        // развёрнутое окно до панели не достаёт, решает сама панель
+        assert_eq!(works(&[m.clone()], &[maxed(2, rect(0, 0, 1920, 1040), 1800), bar]), vec![m.work]);
+        // окошко поверх панели — не весь экран
+        assert_eq!(works(&[m.clone()], &[cover(3, rect(900, 1000, 1100, 1060)), cover(2, rect(0, 0, 1920, 1080)), bar]), vec![m.work]);
+    }
+
+    #[test]
+    fn fullscreen_lowers_only_its_monitor() {
+        let a = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1040));
+        let b = Monitor { primary: false, ..screen(rect(1920, 0, 3840, 1080), rect(1920, 0, 3840, 1040)) };
+        let ws = [cover(2, rect(0, 0, 1920, 1080)), cover(1, rect(0, 1040, 1920, 1080)), cover(4, rect(1920, 1040, 3840, 1080))];
+        assert_eq!(works(&[a, b.clone()], &ws), vec![rect(0, 0, 1920, 1080), b.work]);
+        // панели нет (автоскрытие) — менять нечего
+        let c = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1080));
+        assert_eq!(works(&[c.clone()], &[cover(2, rect(0, 0, 1920, 1080))]), vec![c.work]);
     }
 
     /// Карта этой машины: `cargo test -- --ignored --nocapture`. Без заголовков — только геометрия.
