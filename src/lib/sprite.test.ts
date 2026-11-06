@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ANIMS, bedFrame, bedMask, BOWL_X, bowlFrame, bowlLeft, fatOn, FATS, flip, hitMask, onBowl, PALETTE, SCRUFF_AT, SIZE } from './sprite';
+import { ANIMS, bedFrame, bedMask, BOWL_X, bowlFrame, bowlLeft, fatOn, FATS, flip, hitMask, onBowl, PALETTE, PUDDLE_FRAMES, PUDDLE_H, PUDDLE_W, SCRUFF_AT, SIZE } from './sprite';
 
 const all = FATS.flatMap((fat) =>
   Object.entries(ANIMS[fat]).flatMap(([name, a]) => a.frames.map((f, i) => [`${name}[${i}] жир ${fat}`, f] as const)),
@@ -27,7 +27,7 @@ describe('кадры', () => {
 
   it('всё, кроме сна на рамке, стоит на земле — нижний ряд закрашен', () => {
     for (const fat of FATS)
-      for (const name of ['stand', 'walk', 'sit', 'loaf', 'sideLoaf', 'faceplant', 'sidePlant', 'groom', 'hungry', 'eat', 'groggy', 'angry', 'carried'] as const)
+      for (const name of ['stand', 'walk', 'sit', 'loaf', 'sideLoaf', 'faceplant', 'sidePlant', 'groom', 'hungry', 'eat', 'groggy', 'angry', 'carried', 'squat', 'smug', 'strut'] as const)
         for (const f of ANIMS[fat][name].frames) expect(hitMask(f)[SIZE - 1]).not.toBe(0);
   });
 
@@ -177,5 +177,35 @@ describe('окно миски', () => {
 
   it('без миски в кадре — null', () => {
     expect(bowlLeft(ANIMS[0].sit.frames[0])).toBeNull();
+  });
+});
+
+describe('лужа мести', () => {
+  it.each(PUDDLE_FRAMES.map((f, i) => [i, f] as const))('кадр %i — SIZE×SIZE из палитры, по центру внизу, не шире PUDDLE_W×PUDDLE_H', (_, f) => {
+    expect(f).toHaveLength(SIZE);
+    for (const row of f) {
+      expect(row).toHaveLength(SIZE);
+      for (const ch of row) expect(ch === '.' || ch in PALETTE).toBe(true);
+    }
+    const rows = f.map((row, y) => [y, row] as const).filter(([, row]) => row.trim().replaceAll('.', '') !== '');
+    expect(rows[rows.length - 1][0]).toBe(SIZE - 1);
+    expect(rows.length).toBeLessThanOrEqual(PUDDLE_H);
+    const xs = f.flatMap((row) => [...row].flatMap((ch, x) => (ch === '.' ? [] : [x])));
+    expect(Math.max(...xs) - Math.min(...xs) + 1).toBeLessThanOrEqual(PUDDLE_W);
+    // по центру: поля слева и справа разнятся не больше чем на клетку
+    expect(Math.abs(Math.min(...xs) - (SIZE - 1 - Math.max(...xs)))).toBeLessThanOrEqual(1);
+  });
+
+  it('растёт, потом бледнеет: кадры разные, полная — самая большая', () => {
+    const sizes = PUDDLE_FRAMES.map((f) => f.join('').replaceAll('.', '').length);
+    expect(new Set(PUDDLE_FRAMES.map((f) => f.join('|'))).size).toBe(PUDDLE_FRAMES.length);
+    expect(sizes[0]).toBeLessThan(sizes[1]);
+    expect(sizes[1]).toBeLessThan(sizes[2]);
+    expect(sizes[4]).toBeLessThan(sizes[3]);
+    expect(Math.max(...sizes)).toBe(sizes[2]);
+  });
+
+  it('полупрозрачная: сквозь неё видно окно', () => {
+    for (const ch of new Set(PUDDLE_FRAMES.flat().join('').replaceAll('.', ''))) expect(PALETTE[ch as keyof typeof PALETTE]).toMatch(/^rgba\(/);
   });
 });

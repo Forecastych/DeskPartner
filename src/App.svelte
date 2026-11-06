@@ -10,10 +10,12 @@
   import * as movie from './lib/movie';
   import { verdict, type Film, type Verdict } from './lib/reviews';
   import * as yarn from './lib/yarn';
+  import * as revenge from './lib/revenge';
   import * as roam from './lib/roam';
   import * as news from './lib/news';
   import { parse, serialize, TOPICS, type Chatter, type HunterArea, type Settings, type Topic } from './lib/settings';
   import * as sleepy from './lib/sleep';
+  import * as tally from './lib/stats';
   import { ANIMS, BOWL_X, bowlLeft, draw, fatOn, flip, ground, hitMask, onBowl, SCRUFF_AT, SIZE, type AnimName, type Frame } from './lib/sprite';
   import { localLegacy, memoryStore, open, tauriBackend, type Store } from './lib/store';
   import * as wiki from './lib/wiki';
@@ -33,6 +35,11 @@
   const EAT_MS = 8000;
   /** Сколько стоит со звёздочками, врезавшись в край окна на охоте. */
   const BONK_MS = 800;
+  /**
+   * Точку замечает не сразу: Ctrl+C с заминкой перед буквой зажигает указку на миг (laser.rs, HOLD),
+   * и без задержки кошка срывалась через весь экран за вспышкой и шла обратно.
+   */
+  const DOT_NOTICE_MS = 500;
   /** Охотник: мышь пробегает раз в HUNT_MIN..HUNT_MAX мс, когда кошка свободна. */
   const HUNT_MIN = 15 * 60_000;
   const HUNT_MAX = 40 * 60_000;
@@ -85,27 +92,14 @@
     quiet?: string;
     /** Только в Windows: идёт ли видео (media.rs). */
     media?: { watching: boolean; title: string; loud: boolean };
-    /** Только в Windows: идёт созвон — занят микрофон или камера, или Zoom показывает экран. */
+    /** Программа в активном окне (имя, не заголовок): месть выбирает, мстить ли в её окно. */
+    app?: string | null;
+    /** Только в Windows: идёт созвон — занят микрофон или камера, или Zoom показывает экран. Месть тоже молчит. */
     call?: boolean;
-  }
-
-  /** Копится за всю жизнь программы; питомец сбежал — цифры остаются. */
-  interface Stats {
-    fed: number;
-    petted: number;
   }
 
   /** Файлы в папке, выбранной на первом запуске; до открытия — память, чтобы не ловить null. */
   let store: Store = memoryStore();
-
-  function loadStats(): Stats {
-    try {
-      const s = JSON.parse(store.get('stats') ?? '{}');
-      return { fed: Number(s.fed) || 0, petted: Number(s.petted) || 0 };
-    } catch {
-      return { fed: 0, petted: 0 };
-    }
-  }
 
   /** Где кошку оставили. Без места — появится у правого края, как в первый раз. */
   function loadSpot(): roam.Spot | null {
@@ -143,7 +137,8 @@
   let frozen = false;
   let belly: Belly = fresh();
   let nap: sleepy.Sleep = sleepy.fresh();
-  let stats: Stats = { fed: 0, petted: 0 };
+  /** Копится за всю жизнь программы (lib/stats); питомец сбежал — цифры остаются. */
+  let stats = tally.fresh(Date.now());
   /** Покормили, а кошка не у миски: сначала дойдёт, потом ест. Корм тем временем лежит в миске. */
   let mealPending = false;
   let lastBowl = '';
@@ -215,6 +210,8 @@
   let pet: roam.Pet | null = null;
   /** Лазерная точка, физ. px рабочего стола; null — лазер выключен. */
   let dot: roam.Dot | null = null;
+  /** Когда точка зажглась; охота — только через DOT_NOTICE_MS. */
+  let dotSince = 0;
   /** На прошлом шаге охотилась: бросила — снять охоту один раз. */
   let hunted = false;
   /** Врезалась — до этих пор ошалело стоит со звёздочками. */
@@ -233,6 +230,16 @@
   let game: yarn.Game | null = null;
   let nextYarn = 0;
   let yarnNow = false;
+  /** Режим из настроек: месть — только в «Шалостях». */
+  let mode = 'calm';
+  /** Обида и перезарядка мести (revenge.ts); сама месть (null — нет); лужа на экране; месть из трея dev-сборки. */
+  let grudge = revenge.fresh();
+  let payback: revenge.Mission | null = null;
+  let puddle: revenge.Puddle | null = null;
+  let revengeNow = false;
+  /** Самая важная программа дня по трекеру: спрашиваем, только пока кошка в обиде. */
+  let topApp: string | null = null;
+  let lastPuddle = '';
   /** Верхние кромки рамок внутри окон — полки для мыши на весь экран. */
   let shelves: roam.Ledge[] = [];
   let lastShelves = 0;
@@ -254,7 +261,8 @@
     lastSave = now;
     store.set('belly', save(belly));
     store.set('sleep', sleepy.save(nap));
-    store.set('stats', JSON.stringify(stats));
+    store.set('stats', tally.save(stats));
+    store.set('revenge', revenge.save(grudge));
     store.set('talk', chatter.save(talk));
     if (pet) store.set('spot', JSON.stringify(roam.spotOf(pet)));
     // окно-опору не храним: после перезапуска у окон другие hwnd — вещь найдёт рамку по точке
@@ -325,7 +333,7 @@
 
   /** К миске; у миски — мордой к ней, она справа. */
   function toBowl() {
-    if (!pet || !world || pet.move === 'out' || away() || pet.hunt) return;
+    if (!pet || !world || pet.move === 'out' || away() || pet.hunt || revenge.owns(payback)) return;
     const b = roam.bowlAt(world, bowlPlace);
     if (!b) return;
     if (roam.atBowl(pet, world, bowlPlace)) pet = { ...pet, facing: -1 };
@@ -401,9 +409,17 @@
     } else groomUntil = now + GROOM_MS;
   }
 
+  /**
+   * Идёт видео: сеанс засчитан или ещё копится (movie.START_MS). Уже в эти первые секунды не бродит
+   * и не играет — иначе после перезапуска успевала уйти на другой монитор и шла обратно.
+   */
+  function filming(): boolean {
+    return film.active || !!senses?.media?.watching;
+  }
+
   /** Перебраться на другое место: посидеть у края пола или на окне, поспать — лучше на окне, а есть лежак — в нём. */
   function wander(kind: 'rest' | 'sleep') {
-    if (!pet || !world || pet.move === 'out' || away() || pet.hunt || film.active) return;
+    if (!pet || !world || pet.move === 'out' || away() || pet.hunt || filming() || revenge.owns(payback)) return;
     const bed = kind === 'sleep' && bedOn && Math.random() < BED_SLEEP ? roam.bedAt(world, bedPlace) : null;
     bedBound = bed !== null;
     pet = roam.goTo(pet, world, bed ? { surface: bed.surface, x: bed.x } : roam.pickSpot(world, pet, kind, Math.random));
@@ -436,6 +452,7 @@
     const [next, event] = movie.step(film, dt, !!media?.watching, filmVerdict, Math.random);
     film = next;
     if (event === 'start') {
+      stats.films++;
       if (speakingUntil) hush();
       askReviews(filmTitle);
     }
@@ -454,7 +471,8 @@
       sleepPose = null;
       persist(now);
     }
-    if (film.active && media?.loud && filmNap && sleepy.mood(nap) === 'away') {
+    // зовёт только ушедшую за край: по пути туда громкая сцена её не разворачивает
+    if (film.active && media?.loud && filmNap && sleepy.mood(nap) === 'away' && pet?.move === 'out') {
       nap = sleepy.call(nap);
       film = movie.awake(film);
       filmNap = false;
@@ -482,7 +500,7 @@
    * а не засыпает там, где цель потерялась. Лежак выключили — спит, где стоит.
    */
   function toBed() {
-    if (!pet || !world || pet.move === 'out' || away() || pet.hunt) return;
+    if (!pet || !world || pet.move === 'out' || away() || pet.hunt || revenge.owns(payback)) return;
     const b = bedOn ? roam.bedAt(world, bedPlace) : null;
     if (!b) return void (bedBound = false);
     if (roam.atBed(pet, world, bedPlace)) return;
@@ -498,6 +516,9 @@
     if (!result) return false;
     nap = next;
     sleepPose = null;
+    // не доспавшая может затаить обиду (revenge.ts: шанс зависит от того, как разбудили)
+    grudge = revenge.provoke(grudge, result, now, Math.random, mode);
+    stats.woken++;
     if (result === 'wake') groomUntil = now + GROOM_MS;
     // 'leave' — за край она уйдёт сама: это заметит live()
     persist(now);
@@ -510,16 +531,19 @@
     lastStep = now;
     const [next, event] = step(belly, dt);
     belly = next;
+    if (event === 'gone') stats.runaways++;
+    stats = tally.tick(stats, dt, !away(), film.active);
     if (event === 'eat') serve(now);
     // поела где-то там
     if (event === 'return') comeBack(now);
 
     // пока смотрит кино, сама не устаёт: когда уснуть на фильме, решает movie.ts. Видео уже
     // играет, но сеанс ещё не засчитан (START_MS) — тоже: иначе успеет уйти спать на лежак
-    const watching = (film.active || !!senses?.media?.watching) && sleepy.mood(nap) === 'awake';
+    const watching = filming() && sleepy.mood(nap) === 'awake';
     const [rested, mood] = watching ? [nap, null] : sleepy.step(nap, dt, humanIdle);
     nap = rested;
     if (mood === 'sleep') {
+      stats.naps++;
       sleepPose = pick(SLEEPS);
       wander('sleep');
     }
@@ -536,7 +560,7 @@
     // Уход и возвращение сверяются с голодом и сном каждый кадр, а не только по событиям:
     // так их не потерять ни при запуске, ни при побудке, ни при «Новом котике».
     // несомую мир не двигает: уйти за край или к миске она успеет, когда отпустят
-    if (pet && world && !carried && !mouse.owns(hunt) && !yarn.owns(game)) {
+    if (pet && world && !carried && !mouse.owns(hunt) && !yarn.owns(game) && !revenge.owns(payback)) {
       if (!away()) {
         if (pet.move === 'out') comeBack(now);
       } else if (pet.move !== 'out' && pet.exit === 0) pet = roam.leave(pet, world);
@@ -558,7 +582,16 @@
    * лазер — игра, а не побудка.
    */
   function hunting(now: number): boolean {
-    return dot !== null && !!pet && !!world && pet.move !== 'out' && !away() && sleepy.mood(nap) === 'awake' && now >= eatUntil;
+    return (
+      dot !== null &&
+      now - dotSince >= DOT_NOTICE_MS &&
+      !!pet &&
+      !!world &&
+      pet.move !== 'out' &&
+      !away() &&
+      sleepy.mood(nap) === 'awake' &&
+      now >= eatUntil
+    );
   }
 
   /** Гоняться за мышью можно: охотник включён, кошка дома, бодрая, не ест, не в руках и лазер не светит. */
@@ -570,10 +603,11 @@
       !carried &&
       !holding &&
       dot === null &&
-      !film.active &&
+      !filming() &&
       !away() &&
       sleepy.mood(nap) === 'awake' &&
-      now >= eatUntil
+      now >= eatUntil &&
+      !revenge.owns(payback)
     );
   }
 
@@ -586,14 +620,47 @@
       !carried &&
       !holding &&
       dot === null &&
-      !film.active &&
+      !filming() &&
       !away() &&
       sleepy.mood(nap) === 'awake' &&
       now >= eatUntil &&
       !isHungry(belly) &&
-      !mealPending
+      !mealPending &&
+      !revenge.owns(payback)
     );
   }
+
+  /**
+   * Мстить можно: дома, стоит, ни с кем не играет, не в руках, лазер не светит, не ест и не голодна.
+   * Злая или вялая спросонья — тоже: так даже понятнее, за что.
+   */
+  function canRevenge(now: number): boolean {
+    const mood = sleepy.mood(nap);
+    return (
+      !!pet &&
+      !!world &&
+      !carried &&
+      !holding &&
+      dot === null &&
+      !away() &&
+      pet.move === 'still' &&
+      !pet.hunt &&
+      !roam.onStrip(pet) &&
+      !hunt &&
+      !game &&
+      // кино смотрят вместе: на сеансе не мстит
+      !filming() &&
+      now >= eatUntil &&
+      !isHungry(belly) &&
+      !mealPending &&
+      (mood === 'awake' || mood === 'angry' || mood === 'groggy')
+    );
+  }
+
+  /** Можно ли мстить сейчас: «Шалости» (или трей dev-сборки), «не мешать» нет, созвона нет. */
+  const gate = (): revenge.Gate => ({ mode: revengeNow ? 'pranks' : mode, quiet: senses?.quiet, call: senses?.call });
+  /** Мешать человеку можно вообще: лужа и начатая месть живут, только пока так. */
+  const unbothered = (): boolean => revenge.allowed({ mode: 'pranks', quiet: senses?.quiet, call: senses?.call });
 
   /** Пустить мышь: кошка стоит без дела — не голодна, не умывается, не идёт спать в лежак. */
   function readyToHunt(now: number): boolean {
@@ -633,6 +700,15 @@
     emitTo('mouse', 'mouse', at).catch(console.error);
   }
 
+  /** Лужа в окно "puddle": середина, низ и кадр; null — пусто. Шлём только перемены. */
+  function tellPuddle(now: number) {
+    const v = revenge.view(puddle, now);
+    const key = v ? `${v.x} ${v.bottom} ${v.frame}` : '';
+    if (key === lastPuddle) return;
+    lastPuddle = key;
+    emitTo('puddle', 'puddle', v).catch(console.error);
+  }
+
   /** Поза на сейчас; null — кошки на экране нет. */
   function choose(now: number): AnimName | null {
     if (carried) return 'carried';
@@ -644,6 +720,8 @@
       // прыжок на точку, падение с карниза — те же позы, что в пути; стоит в мёртвой зоне — следит
       return pet.move === 'still' ? 'stand' : pet.move === 'out' ? null : pet.move;
     }
+    // месть: шипит, идёт, присаживается над лужей, довольна, уходит вразвалку
+    if (pet && payback && revenge.owns(payback)) return revenge.pose(payback, pet);
     // за мышью за край — бегом, обратно — шагом; за краем её не видно
     if (pet && hunt && mouse.owns(hunt)) {
       if (pet.move === 'out') return null;
@@ -747,6 +825,7 @@
       !pet.hunt &&
       !mouse.owns(hunt) &&
       !yarn.owns(game) &&
+      !revenge.owns(payback) &&
       pet.move === 'still' &&
       !away() &&
       sleepy.mood(nap) === 'awake'
@@ -820,6 +899,7 @@
     speakingUntil = now + chatter.shownFor(text);
     voteFor = about && { topic: about.topic, source: about.source };
     invoke('say', { text, ...head, vote: !!about }).catch(console.error);
+    stats.said++;
     persist(now);
   }
 
@@ -896,15 +976,29 @@
     lastMove = now;
     if (!hunt && !game && pet && world && now >= nextHunt && (huntNow ? canHunt(now) && pet.move !== 'out' : readyToHunt(now))) {
       hunt = mouse.start(mouse.arena(world, hunterArea, shelves), now, Math.random);
+      stats.mice++;
       huntNow = false;
       lastShelves = 0;
     }
     if (!game && !hunt && pet && world && now >= nextYarn && (yarnNow ? canYarn(now) && pet.move !== 'out' : readyToYarn(now))) {
       const started = yarn.start(world, pet, now);
       // внешних краёв нет — клубок выносить неоткуда, попробует в следующий раз
-      if (started) [game, pet] = started;
-      else nextYarn = now + yarnGap();
+      if (started) {
+        [game, pet] = started;
+        stats.yarns++;
+      } else nextYarn = now + yarnGap();
       yarnNow = false;
+    }
+    // месть: обижена, перезарядка прошла, человек в самой важной программе дня (или ждать надоело)
+    if (!payback && pet && world && canRevenge(now) && revenge.ready(grudge, now, gate(), !!topApp && senses?.app === topApp)) {
+      const started = revenge.start(world, pet, senses?.app, now);
+      if (started) {
+        [payback, pet] = started;
+        stats.revenges++;
+        grudge = revenge.begin(grudge, now);
+        revengeNow = false;
+        persist(now);
+      }
     }
     const was = pet && `${pet.move} ${pet.hunt?.mode}`;
     // мышь бегает и пока кошку несут: погоню это прерывает, но мышь удирает своим ходом
@@ -922,7 +1016,10 @@
       [hunt, p, e] = mouse.tick(hunt, arena, pet, now, dt, Math.random);
       // прерванная погоня кошку не трогает: ею дальше правит приложение
       if (ruled) [pet, event] = [p, e];
-      if (e === 'lick') lickUntil = now + LICK_MS;
+      if (e === 'lick') {
+        lickUntil = now + LICK_MS;
+        stats.caught++;
+      }
       if (hunt.phase === 'done') {
         hunt = null;
         nextHunt = now + huntGap();
@@ -941,6 +1038,28 @@
         nextYarn = now + yarnGap();
       }
     }
+    // месть так же: взяли на руки, лазер, ушла, «не мешать» или созвон — бросает, кошкой правит приложение
+    if (payback && pet && world) {
+      if (revenge.owns(payback) && (carried || dot !== null || away() || !unbothered())) payback = revenge.drop(payback);
+      const acting = revenge.owns(payback);
+      let e: roam.RoamEvent | null;
+      let p: roam.Pet;
+      let spilt: revenge.Puddle | null;
+      [payback, p, e, spilt] = revenge.tick(payback, world, pet, now, dt, Math.random);
+      if (acting) [pet, event, ruled] = [p, e, true];
+      if (spilt) {
+        puddle = spilt;
+        stats.puddles++;
+      }
+      if (payback.phase === 'done') payback = null;
+    }
+    // лужа едет за своим окном и сохнет сама; «не мешать» или созвон — пропадает сразу
+    if (puddle) {
+      if (!unbothered()) puddle = null;
+      else if (world) puddle = revenge.follow(puddle, world, now);
+      if (puddle && revenge.gone(puddle, now)) puddle = null;
+    }
+    tellPuddle(now);
     tellMouse();
     if (pet && world && !carried) {
       if (ruled) {
@@ -948,6 +1067,7 @@
       } else if (dot && hunting(now)) {
         // отскочила от стены — дальше ошалело стоит со звёздочками, пока не придёт в себя
         if (now >= bonkUntil || pet.hunt?.mode === 'bonk') [pet, event] = roam.chase(pet, world, dot, dt);
+        if (!hunted) stats.lasers++;
         hunted = true;
         if (event === 'bonk') bonkUntil = now + BONK_MS;
       } else {
@@ -1067,6 +1187,8 @@
     } else if (!disturb(now)) {
       pettedUntil = now + PETTED_MS;
       stats.petted++;
+      // гладят без передышки — это уже тычки (revenge.PESTER_CLICKS)
+      grudge = revenge.poked(grudge, now, Math.random, mode);
       talk = chatter.liked(talk, now);
     }
     render();
@@ -1076,6 +1198,7 @@
   function pickUp() {
     if (!holding) return;
     carried = true;
+    stats.carried++;
     eatUntil = groomUntil = pettedUntil = bonkUntil = 0;
     groomOnArrival = false;
     if (hunted && pet) pet = roam.endChase(pet);
@@ -1095,6 +1218,7 @@
     // клубок так же: включили — не сразу, выключили — укатится сам (move: canYarn)
     if (s.yarn && !yarnOn) nextYarn = Date.now() + yarnGap();
     yarnOn = s.yarn;
+    mode = s.mode;
     topics = s.topics;
     reviewsOn = s.reviews;
     // ленты новых тем качаются сразу, а не когда кошка соберётся рассказать
@@ -1132,6 +1256,7 @@
       { id: 'hunterArea', text: 'Мышь по всему экрану', checked: s.hunterArea === 'screen', hint: 'иначе — по панели задач' },
       { id: 'yarn', text: 'Клубок', checked: s.yarn, hint: 'раз в час-два катает по панели задач' },
       { separator: true },
+      { id: 'stats', text: 'Статистика…' },
       { id: 'settings', text: 'Настройки…' },
     ];
     invoke('open_menu', { owner: 'pet', items }).catch(console.error);
@@ -1141,6 +1266,7 @@
     if (id === 'feeder' || id === 'bed' || id === 'hideFromCapture' || id === 'hunter' || id === 'hunterArea' || id === 'yarn') toggle(id);
     else if (id === 'laser') invoke('set_laser', { on: dot === null }).catch(console.error);
     else if (id === 'settings') invoke('open_settings').catch(console.error);
+    else if (id === 'stats') invoke('open_stats').catch(console.error);
   }
 
   async function sense() {
@@ -1152,9 +1278,13 @@
       watch(Date.now(), senses);
       // за фильмом человек не трогает мышь — это не «отошёл»
       humanIdle = seenHuman && senses.idle && !film.active;
+      const hid = calls.onCall(hide);
       hide = calls.step(hide, senses.call ?? false, Date.now());
+      if (calls.onCall(hide) && !hid) stats.calls++;
       // созвон начался — облачко убрать сразу, даже проверочное из трея
       if (onCall() && speakingUntil) hush();
+      // важная программа дня нужна, только пока кошка в обиде
+      if (revenge.holds(grudge, Date.now())) topApp = await invoke<string | null>('top_app');
     } catch (e) {
       console.error(e);
     }
@@ -1181,6 +1311,7 @@
       nextHunt = Date.now() + huntGap();
       yarnOn = settings.yarn;
       nextYarn = Date.now() + yarnGap();
+      mode = settings.mode;
       talk = chatter.load(store.get('talk'), Date.now(), chatterLevel, Math.random);
       bowlPlace = loadPlace('bowl');
       bedPlace = loadPlace('bed');
@@ -1188,7 +1319,8 @@
       invoke('set_capture_hidden', { hidden: settings.hideFromCapture }).catch(console.error);
       belly = load(store.get('belly'));
       nap = sleepy.load(store.get('sleep'));
-      stats = loadStats();
+      stats = tally.load(store.get('stats'), Date.now());
+      grudge = revenge.load(store.get('revenge'), Date.now());
       if (world) pet = roam.restore(world, loadSpot(), away());
       lastMove = Date.now();
       render();
@@ -1257,6 +1389,11 @@
       yarnNow = true;
     });
     const unnews = listen('dev-news', newsNow);
+    // «Месть» оттуда же: обида сразу, мимо режима, шанса и перезарядки; «не мешать» и созвон — не мимо
+    const unrevenge = listen('dev-revenge', () => {
+      grudge = revenge.dare(grudge, Date.now());
+      revengeNow = true;
+    });
     // окно настроек уже сохранило файл; кеш обновляем, чтобы следующая галочка в меню не затёрла его старьём
     // Слушаем своим окном: глобальный listen поймал бы и наш же emitTo('settings', 'settings').
     const win = getCurrentWebviewWindow();
@@ -1278,10 +1415,13 @@
       frozen = false;
     });
     const unpick = win.listen<{ id: string }>('menu-pick', (e) => menuPick(e.payload.id));
+    // окно «Статистика» спрашивает свежие цифры: в файле они догоняют только при сохранении
+    const unstats = win.listen('stats-ask', () => emitTo('stats', 'stats', stats).catch(console.error));
     // своим окном: такое же событие Rust шлёт и окнам миски и лежака
     const undrag = win.listen('drag-start', pickUp);
     // лазер: Rust шлёт курсор, пока указка включена, — охоту ведёт move()
     const unlaser = win.listen<roam.Dot>('laser', (e) => {
+      if (dot === null) dotSince = Date.now();
       dot = e.payload;
     });
     const unlaserOff = win.listen('laser-off', () => {
@@ -1316,8 +1456,8 @@
       clearTimeout(timer);
       clearInterval(moving);
       clearInterval(id);
-      const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn, unnews];
-      for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, undrag, unlaser, unlaserOff, unshoo, unvote]) off.then((f) => f());
+      const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn, unnews, unrevenge];
+      for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, unstats, undrag, unlaser, unlaserOff, unshoo, unvote]) off.then((f) => f());
     };
   });
 </script>

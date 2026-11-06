@@ -81,8 +81,14 @@ fn listed(list: &[&str], name: &str) -> bool {
     list.iter().any(|p| name == *p || name.starts_with(&format!("{p}.")) || name.starts_with(&format!("{p}_")))
 }
 
+/// Браузер на весь экран, даже не в фокусе: человек смотрит фильм на одном мониторе, а пишет
+/// на другом. `exes` — `source_name` от путей окон, накрывших свой монитор (world::covering).
+pub fn browser_fullscreen<S: AsRef<str>>(exes: &[S]) -> bool {
+    exes.iter().any(|e| listed(BROWSERS, e.as_ref()))
+}
+
 /// Идёт ли видео прямо сейчас. `fg` — exe активного окна (`source_name` от пути), `fullscreen` —
-/// Windows считает, что что-то развёрнуто на весь экран (win::Quiet::Fullscreen).
+/// что-то на весь экран: активное окно (win::Quiet::Fullscreen) или браузер где угодно.
 pub fn watching(s: Option<&Session>, fg: &str, level: f32, fullscreen: bool) -> bool {
     if let Some(s) = s.filter(|s| s.playing) {
         if s.video || listed(PLAYERS, &s.source) || s.source.contains("zunevideo") {
@@ -93,6 +99,26 @@ pub fn watching(s: Option<&Session>, fg: &str, level: f32, fullscreen: bool) -> 
         }
     }
     listed(PLAYERS, fg) && level > SOUND
+}
+
+/// Браузер засчитывается только на весь экран, а Windows знает «весь экран» лишь про активное окно:
+/// alt-tab с фильма — и через полминуты сеанс бы кончился. Поэтому фильм, засчитанный на весь экран,
+/// держится, пока плитка играет его же (источник и название). Пауза не сбрасывает, другой ролик — сбрасывает.
+#[derive(Debug, Default)]
+pub struct Held(Option<(String, String)>);
+
+impl Held {
+    pub fn watching(&mut self, s: Option<&Session>, fg: &str, level: f32, fullscreen: bool) -> bool {
+        let now = s.filter(|s| s.playing).map(|s| (s.source.clone(), s.title.clone()));
+        if let Some(film) = &now {
+            if fullscreen && listed(BROWSERS, &film.0) {
+                self.0 = now.clone();
+            } else if self.0.as_ref() != Some(film) {
+                self.0 = None;
+            }
+        }
+        watching(s, fg, level, fullscreen) || (now.is_some() && self.0 == now)
+    }
 }
 
 /// Из сеансов плитки — играющий, видео вперёд; никто не играет — None.
@@ -181,6 +207,7 @@ mod sys {
                 let mut session: Option<Session> = None;
                 let mut fg = String::new();
                 let mut full = false;
+                let mut held = Held::default();
                 loop {
                     std::thread::sleep(SAMPLE);
                     let at = Instant::now();
@@ -212,12 +239,19 @@ mod sys {
                             None => None,
                         };
                         fg = crate::win::foreground_path().map(|p| source_name(&p)).unwrap_or_default();
-                        full = crate::win::quiet() == crate::win::Quiet::Fullscreen;
+                        full = crate::win::quiet() == crate::win::Quiet::Fullscreen || {
+                            let exes: Vec<String> = crate::world::covering()
+                                .into_iter()
+                                .filter_map(crate::win::window_path)
+                                .map(|p| source_name(&p))
+                                .collect();
+                            browser_fullscreen(&exes)
+                        };
                     }
                     n = n.wrapping_add(1);
 
                     let now = Media {
-                        watching: watching(session.as_ref(), &fg, loud.level(), full),
+                        watching: held.watching(session.as_ref(), &fg, loud.level(), full),
                         title: session.as_ref().map(|s| s.title.clone()).unwrap_or_default(),
                         loud: loud.loud(at),
                     };
@@ -265,6 +299,8 @@ mod sys {
             println!("{s:?}");
         }
         println!("fg={:?} full={}", crate::win::foreground_path(), crate::win::quiet() == crate::win::Quiet::Fullscreen);
+        let exes: Vec<String> = crate::world::covering().into_iter().filter_map(crate::win::window_path).map(|p| source_name(&p)).collect();
+        println!("covering={exes:?} browser_fullscreen={}", browser_fullscreen(&exes));
     }
 }
 
@@ -282,6 +318,33 @@ mod tests {
         assert_eq!(source_name(r"C:\Program Files\VideoLAN\VLC\vlc.exe"), "vlc");
         assert_eq!(source_name("Microsoft.ZuneVideo_8wekyb3d8bbwe!Microsoft.ZuneVideo"), "microsoft.zunevideo_8wekyb3d8bbwe");
         assert_eq!(source_name("MSEdge"), "msedge");
+    }
+
+    #[test]
+    fn browser_fullscreen_by_window_exe() {
+        assert!(browser_fullscreen(&["explorer", "chrome"]));
+        assert!(browser_fullscreen(&["firefox"]));
+        // игра на весь экран — не браузер
+        assert!(!browser_fullscreen(&["cs2"]));
+        assert!(!browser_fullscreen::<&str>(&[]));
+    }
+
+    #[test]
+    fn fullscreen_film_survives_alt_tab_and_pause() {
+        let mut h = Held::default();
+        let film = playing("chrome", false);
+        // в окне — ещё не кино
+        assert!(!h.watching(Some(&film), "chrome", 0.5, false));
+        assert!(h.watching(Some(&film), "chrome", 0.5, true));
+        // alt-tab: Windows больше не говорит «весь экран», а фильм тот же
+        assert!(h.watching(Some(&film), "code", 0.5, false));
+        // пауза не играет, но и не забывает
+        assert!(!h.watching(None, "code", 0.0, false));
+        assert!(h.watching(Some(&film), "code", 0.5, false));
+        // другой ролик в окне — уже музыка, и прежний фильм забыт
+        let song = Session { title: "Плейлист".into(), ..playing("chrome", false) };
+        assert!(!h.watching(Some(&song), "chrome", 0.5, false));
+        assert!(!h.watching(Some(&film), "chrome", 0.5, false));
     }
 
     #[test]

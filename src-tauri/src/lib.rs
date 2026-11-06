@@ -2,6 +2,7 @@
 //! проходят везде, кроме рисунка (hit.rs). "setup" — обычное окно первого запуска: пока
 //! человек не выбрал папку данных и не сохранил настройки (store.rs), питомца нет, есть только оно.
 //! "settings" — обычное окно настроек, открывается из трея и меню питомца.
+//! "stats" — окно статистики, оттуда же; только показывает цифры, которые копит питомец.
 
 mod bubble;
 mod call;
@@ -11,6 +12,7 @@ mod laser;
 mod media;
 mod menu;
 mod news;
+mod revenge;
 mod reviews;
 mod shake;
 mod store;
@@ -164,6 +166,8 @@ fn build_sprite_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWin
 /// Питомец, миска, лежак и мышь, у каждого свой поток прозрачности для кликов.
 fn open_sprites(app: &AppHandle) -> tauri::Result<()> {
     let masks = app.state::<Arc<Masks>>().inner().clone();
+    // лужа мести — до спрайтов: так она ложится под кошку
+    revenge::build(app)?;
     for label in SPRITES {
         hit::spawn(build_sprite_window(app, label)?, masks.clone());
     }
@@ -243,6 +247,32 @@ async fn open_settings(app: AppHandle) -> Result<(), String> {
     show_settings(&app).map_err(|e| e.to_string())
 }
 
+/// Окно статистики: тоже одно на всё приложение, открыто — поднять. Только показывает цифры,
+/// поэтому меньше настроек и закрывается без последствий.
+fn show_stats(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(w) = app.get_webview_window("stats") {
+        w.unminimize()?;
+        w.show()?;
+        return w.set_focus();
+    }
+    WebviewWindowBuilder::new(app, "stats", WebviewUrl::App("index.html".into()))
+        .title("DeskPartner — статистика")
+        .inner_size(560.0, 640.0)
+        .min_inner_size(400.0, 360.0)
+        .decorations(false)
+        .shadow(true)
+        .center()
+        .focused(true)
+        .build()?;
+    Ok(())
+}
+
+/// async — как open_settings.
+#[tauri::command]
+async fn open_stats(app: AppHandle) -> Result<(), String> {
+    show_stats(&app).map_err(|e| e.to_string())
+}
+
 /// Сменить папку данных и перезапуститься: в новой папке могли лежать свои файлы питомца,
 /// они побеждают, а перечитать всё с нуля проще и надёжнее, чем подменять на ходу.
 /// Синхронная, как и команды store.rs: идёт в главном потоке по очереди с save_state.
@@ -266,9 +296,10 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let call = MenuItem::with_id(app, "call", "Позвать питомца", true, None::<&str>)?;
     // некормленый кот уходит навсегда — без этого пункта вернуть питомца было бы нечем
     let adopt = MenuItem::with_id(app, "adopt", "Новый котик", true, None::<&str>)?;
+    let stats = MenuItem::with_id(app, "stats", "Статистика…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Настройки…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&call, &adopt, &settings, &quit])?;
+    let menu = Menu::with_items(app, &[&call, &adopt, &stats, &settings, &quit])?;
     // проверить облачко, не дожидаясь паузы и срока; в релизную сборку не попадает
     #[cfg(debug_assertions)]
     menu.insert(&MenuItem::with_id(app, "dev-say", "Сказать что-нибудь (dev)", true, None::<&str>)?, 0)?;
@@ -284,11 +315,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // показать новость по темам сейчас, не дожидаясь срока факта
     #[cfg(debug_assertions)]
     menu.insert(&MenuItem::with_id(app, "dev-news", "Новость (dev)", true, None::<&str>)?, 4)?;
+    // отомстить сейчас: обида без шанса и перезарядки; в «не мешать» и на созвоне всё равно нет
+    #[cfg(debug_assertions)]
+    menu.insert(&MenuItem::with_id(app, "dev-revenge", "Месть (dev)", true, None::<&str>)?, 5)?;
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("DeskPartner")
         .menu(&menu)
         .on_menu_event(|app, e| match e.id().as_ref() {
-            id @ ("call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn" | "dev-news") => {
+            id @ ("call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn" | "dev-news" | "dev-revenge") => {
                 if let Err(err) = app.emit_to("pet", id, ()) {
                     eprintln!("{id}: {err}");
                 }
@@ -299,6 +333,14 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 tauri::async_runtime::spawn(async move {
                     if let Err(err) = show_settings(&app) {
                         eprintln!("settings: {err}");
+                    }
+                });
+            }
+            "stats" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(err) = show_stats(&app) {
+                        eprintln!("stats: {err}");
                     }
                 });
             }
@@ -334,6 +376,7 @@ pub fn run() {
             set_capture_hidden,
             finish_setup,
             open_settings,
+            open_stats,
             move_data_dir,
             menu::open_menu,
             menu::menu_size,
@@ -349,6 +392,7 @@ pub fn run() {
             laser::push_done,
             laser::skid,
             senses,
+            revenge::top_app,
             world::world,
             world::place_pet,
             world::shelves,

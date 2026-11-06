@@ -145,5 +145,8 @@ describe('место', () => {
     // Chrome на весь экран из развёрнутого — в полосах заголовков, не в кромках
     const strip: World = { ...two, ledges: [win(7, 2000, 100, 3000, 900)], strips: [win(9, 0, 0, 1920, 1080)], active: 7 };
     expect(screen(strip, at(strip, 2500), null)).toBe(0);
+    // а Chrome на весь экран недобирает снизу строку в 1 px
+    const chrome: World = { ...two, ledges: [win(7, 2000, 100, 3000, 900)], strips: [win(9, 0, 0, 1920, 1079)], active: 7 };
+    expect(screen(chrome, at(chrome, 2500), 1)).toBe(0);
   });
 });

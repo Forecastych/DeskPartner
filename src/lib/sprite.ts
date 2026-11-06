@@ -32,6 +32,11 @@ export const PALETTE: Record<string, string> = {
   n: '#6e665b', // мышь потемнее, у хвоста
   y: '#e0607e', // клубок
   Y: '#9c3550', // клубок: контур и нитки
+  // Лужа мести полупрозрачная: сквозь неё видно окно, на котором она «лежит».
+  a: 'rgba(232, 206, 84, 0.7)', // лужа
+  A: 'rgba(176, 142, 38, 0.85)', // лужа: край
+  W: 'rgba(255, 250, 214, 0.85)', // лужа: блик
+  e: 'rgba(232, 206, 84, 0.35)', // лужа высыхает
 };
 
 /** Миска и корм в ней: клик сюда кормит, а не гладит. */
@@ -477,6 +482,15 @@ function crouching(fat: Fat, wiggle: boolean): Frame {
   return compose([TAIL_BACK, 0, 22], [sideBody(fat), 4, 21], ...legs, [head(EYES_OPEN), 17, 15]);
 }
 
+/**
+ * Месть: присела, как в засаде, только хвост торчком и неподвижен — поза сидя, хвост в ней
+ * не дёргается. Уши прижаты; кадры отличаются глазами: зло щурится, потом жмурится от усердия.
+ */
+function squatting(fat: Fat, eyes: Part): Frame {
+  const legs = [...BACK, ...FRONT].map((x): [Part, number, number] => [leg(4 - fat), x, 28 + fat]);
+  return compose([TAIL_UP, 0, 14], [sideBody(fat), 4, 21], ...legs, [head(eyes, HEAD_BOTTOM, HEAD_FLAT), 17, 15]);
+}
+
 const STAR: Part = ['.s.', 'sss', '.s.'];
 
 // Пыль из-под передних лап на заносе: клубок то поменьше, то побольше.
@@ -719,6 +733,29 @@ function build(fat: Fat) {
         angry(fat, true, HEAD_BOTTOM, TAIL_PUFF_SWAY),
       ],
     },
+    // месть (revenge.ts): присела над лужей, потом сидит довольная и уходит вразвалку, жмурясь
+    squat: {
+      ms: 500,
+      frames: [squatting(fat, EYES_ANGRY), squatting(fat, EYES_ANGRY), squatting(fat, EYES_SHUT)],
+    },
+    smug: {
+      ms: 600,
+      frames: [
+        sitting(fat, EYES_HAPPY, SIT_TAIL),
+        sitting(fat, EYES_HAPPY, SIT_TAIL),
+        sitting(fat, EYES_HAPPY, SIT_TAIL),
+        sitting(fat, EYES_SHUT, SIT_TAIL),
+      ],
+    },
+    strut: {
+      ms: 150,
+      frames: [
+        standing(fat, EYES_HAPPY, TAIL_UP, SPREAD),
+        standing(fat, EYES_HAPPY, TAIL_SWAY, LIFT_A),
+        standing(fat, EYES_HAPPY, TAIL_UP, SPREAD),
+        standing(fat, EYES_HAPPY, TAIL_SWAY, LIFT_B),
+      ],
+    },
     lick: {
       ms: 180,
       frames: [
@@ -853,6 +890,36 @@ export const MOUSE_ANIMS = {
   // клубок в том же окне; кадр ему задаёт пройденный путь, а не время — `ms` на всякий случай
   yarn: { ms: 150, frames: [0, 1, 2, 3].map(yarn) },
 } satisfies Record<string, Anim>;
+
+// Лужа мести, нарисована попиксельно: растёт из капли, разливается с бликом и каплей сбоку,
+// высыхает — бледнеет и сжимается. Лежит у нижнего края кадра посередине.
+const PUDDLE_SMALL: Part = ['..AAAAAA..', 'AAaaWaaaAA', '.AAAAAAAA.'];
+const PUDDLE_MID: Part = [
+  '.....AAAAAAAA.....',
+  '..AAAaaaWWaaaAAA..',
+  '.AaaaaWWaaaaaaaaA.',
+  'AaaaaaaaaaaaaaaaaA',
+  '.AAAAAAAAAAAAAAAA.',
+];
+const PUDDLE_FULL: Part = [
+  '.........AAAAAAAA...........',
+  '.....AAAAaaaaaaaaAAAA.......',
+  '..AAAaaaaWWWWaaaaaaaaAAA....',
+  '.AaaaaaWWaaaaaaaaaaaaaaaA...',
+  'AaaaaaaaaaaaaaaaaaaaaaaaA...',
+  '.AAaaaaaaaaaaaaaaaaaaaAA.AA.',
+  '...AAAAAAAAAAAAAAAAAAA..AAAA',
+];
+/** Высыхает: цвета бледнеют на ступень — блик и вода в бледное, край в воду (или тоже в бледное). */
+const fade = (part: Part, edge: string): Part => part.map((r) => r.replace(/[aW]/g, 'e').replace(/A/g, edge));
+/** Деталь лужи посередине кадра, низом в нижний ряд. */
+const puddle = (part: Part): Frame => compose([part, 16 - Math.floor(part[0].length / 2), SIZE - part.length]);
+
+/** Самая большая лужа в клетках: столько места ей нужно на окне. */
+export const PUDDLE_W = PUDDLE_FULL[0].length;
+export const PUDDLE_H = PUDDLE_FULL.length;
+/** Кадры лужи: 0–2 растёт, 2 — разлилась, 3–4 высыхает. Кадр задаёт revenge.ts по времени. */
+export const PUDDLE_FRAMES: Frame[] = [PUDDLE_SMALL, PUDDLE_MID, PUDDLE_FULL, fade(PUDDLE_FULL, 'a'), fade(PUDDLE_MID, 'e')].map(puddle);
 
 /** Кадр окна лежака. */
 export const bedFrame = (): Frame => compose([BED, 1, SIZE - BED.length]);

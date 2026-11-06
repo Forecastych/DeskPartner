@@ -182,13 +182,37 @@ pub fn fullscreen(monitors: Vec<Monitor>, windows: &[Win]) -> Vec<Monitor> {
                 .iter()
                 .map(|x| x.frame)
                 .find(|&f| in_band(f))
-                .is_some_and(|f| f.left <= r.left && f.top <= r.top && f.right >= r.right && f.bottom >= r.bottom);
+                .is_some_and(|f| covers(f, r));
             if full {
                 Monitor { work: r, ..m }
             } else {
                 m
             }
         })
+        .collect()
+}
+
+/// Сколько px окну на весь экран прощается недобрать до края: Chrome на весь экран оставляет
+/// снизу строку в 1 px (1439 из 1440), чтобы выезжала скрытая панель задач.
+const COVER_SLACK: i32 = 2;
+
+/// Накрыло ли окно монитор целиком: видео или игра на весь экран, а не просто развёрнутое окно
+/// (развёрнутому недостаёт панели задач — десятки px).
+pub fn covers(frame: Rect, monitor: Rect) -> bool {
+    frame.left <= monitor.left + COVER_SLACK
+        && frame.top <= monitor.top + COVER_SLACK
+        && frame.right >= monitor.right - COVER_SLACK
+        && frame.bottom >= monitor.bottom - COVER_SLACK
+}
+
+/// Обычные окна на весь свой монитор, в фокусе они или нет: «Кино вместе» узнаёт по ним фильм
+/// в браузере, когда человек ушёл в другое окно. Рабочий стол и оверлеи сюда не попадают.
+pub fn covering() -> Vec<i64> {
+    let monitors = sys::monitors();
+    sys::windows()
+        .into_iter()
+        .filter(|w| (w.perch || w.strip.is_some()) && monitors.iter().any(|m| covers(w.frame, m.rect)))
+        .map(|w| w.hwnd)
         .collect()
 }
 
@@ -678,6 +702,19 @@ mod tests {
     /// `work` каждого монитора после [`fullscreen`].
     fn works(ms: &[Monitor], ws: &[Win]) -> Vec<Rect> {
         fullscreen(ms.to_vec(), ws).into_iter().map(|m| m.work).collect()
+    }
+
+    #[test]
+    fn covers_needs_whole_monitor() {
+        let m = Rect { left: 2560, top: 0, right: 4480, bottom: 1200 };
+        assert!(covers(m, m));
+        assert!(covers(Rect { left: 2552, top: -8, right: 4488, bottom: 1208 }, m));
+        // Chrome на весь экран: строка в 1 px снизу
+        assert!(covers(Rect { bottom: 1199, ..m }, m));
+        // развёрнутое: панель задач внизу открыта
+        assert!(!covers(Rect { bottom: 1160, ..m }, m));
+        // на весь соседний монитор — не этот
+        assert!(!covers(Rect { left: 0, top: 0, right: 2560, bottom: 1440 }, m));
     }
 
     #[test]

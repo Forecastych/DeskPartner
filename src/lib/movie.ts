@@ -87,13 +87,17 @@ function monitorAt(world: World, x: number, y: number): number {
 /** Монитор, где стоит кошка. */
 export const petScreen = (world: World, pet: Pet): number => monitorAt(world, pet.x, pet.y - 1);
 
+/** Недобор до края, который прощаем окну на весь экран: Chrome оставляет снизу строку в 1 px (world.rs, COVER_SLACK). */
+const COVER_SLACK = 2;
+
 /**
  * Монитор, целиком накрытый окном (кино на весь экран); такого нет — null. Смотрим и полосы
  * заголовков: Chrome, развёрнутый до перехода на весь экран, Windows так и считает развёрнутым.
  */
 function fullscreen(world: World): number | null {
+  const d = COVER_SLACK;
   for (const { frame: f } of [...world.ledges, ...(world.strips ?? [])]) {
-    const i = world.monitors.findIndex(({ rect: r }) => f.left <= r.left && f.top <= r.top && f.right >= r.right && f.bottom >= r.bottom);
+    const i = world.monitors.findIndex(({ rect: r }) => f.left <= r.left + d && f.top <= r.top + d && f.right >= r.right - d && f.bottom >= r.bottom - d);
     if (i >= 0) return i;
   }
   return null;

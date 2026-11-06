@@ -178,8 +178,17 @@ pub fn foreground_path() -> Option<String> {
     unsafe { foreground_exe() }
 }
 
+/// Полный путь к exe окна `hwnd` (из [`crate::world::covering`]): только путь процесса, не заголовок.
+pub fn window_path(hwnd: i64) -> Option<String> {
+    // SAFETY: окно могли закрыть — тогда pid 0 и None; хэндл процесса закрывается внутри.
+    unsafe { exe_of(hwnd as isize as _) }
+}
+
 unsafe fn foreground_exe() -> Option<String> {
-    let hwnd = GetForegroundWindow();
+    exe_of(GetForegroundWindow())
+}
+
+unsafe fn exe_of(hwnd: HWND) -> Option<String> {
     if hwnd.is_null() {
         return None;
     }
