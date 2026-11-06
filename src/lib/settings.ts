@@ -40,7 +40,27 @@ export type Chatter = (typeof CHATTER)[number];
 export const HUNTER_AREAS = ['taskbar', 'screen'] as const;
 export type HunterArea = (typeof HUNTER_AREAS)[number];
 
+/** Длиннее имя не влезет в облачко и меню трея. */
+export const NAME_MAX = 20;
+
+/** Подсказки на первом запуске: кошка в репликах — «она», имена ей под стать. */
+export const NAMES = ['Мурка', 'Соня', 'Луна', 'Тучка', 'Ириска', 'Пуша', 'Сима', 'Бусинка', 'Дуся', 'Плюшка', 'Фиса', 'Вишня'] as const;
+
+/** Случайное имя из подсказок, но не `except` — кнопка «Другое» должна что-то менять. */
+export function suggestName(rand: () => number, except = ''): string {
+  const pool = NAMES.filter((n) => n !== except);
+  return pool[Math.floor(rand() * pool.length) % pool.length];
+}
+
+/** Имя как его можно показать: без управляющих символов, лишних пробелов и не длиннее NAME_MAX. */
+export function cleanName(v: unknown): string {
+  if (typeof v !== 'string') return '';
+  return [...v.replace(/\p{Cc}/gu, '').replace(/\s+/g, ' ').trim()].slice(0, NAME_MAX).join('').trim();
+}
+
 export interface Settings {
+  /** Имя питомца; пусто — ещё не назвали (настройки из версий без имени). */
+  name: string;
   /** Кормушка: насыпал порций — кошка ест сама, когда проголодается. */
   feeder: boolean;
   /** Лежак на полу: кошка чаще спит в нём, чем на рамках окон. */
@@ -69,6 +89,7 @@ export interface Settings {
 
 export function defaults(): Settings {
   return {
+    name: '',
     feeder: false,
     bed: false,
     hideFromCapture: true,
@@ -106,6 +127,7 @@ export function parse(raw: string | null): Settings {
   if (typeof o !== 'object' || o === null || Array.isArray(o)) return d;
   const s = o as Record<string, unknown>;
   return {
+    name: cleanName(s.name),
     feeder: bool(s.feeder, d.feeder),
     bed: bool(s.bed, d.bed),
     hideFromCapture: bool(s.hideFromCapture, d.hideFromCapture),

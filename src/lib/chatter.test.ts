@@ -93,6 +93,13 @@ describe('say', () => {
     }
   });
 
+  it('по имени зовёт себя, только если её назвали', () => {
+    const texts = (name?: string) =>
+      Array.from({ length: 40 }, (_, i) => say(due(SAT), moment(SAT, { today: 0, name }), 'sometimes', () => i / 40)[1]?.text);
+    expect(texts().some((t) => t?.includes('{name}') || t?.includes('Это я'))).toBe(false);
+    expect(texts('Мурка')).toContain('Мяу! Это я, Мурка.');
+  });
+
   it('does not repeat the last line', () => {
     let t = due(SAT);
     let prev = '';

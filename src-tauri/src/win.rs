@@ -8,7 +8,7 @@
 
 use crate::tracker::Tracker;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, LRESULT, WPARAM};
@@ -40,6 +40,79 @@ static PRESSES: AtomicU32 = AtomicU32::new(0);
 
 pub fn presses() -> u32 {
     PRESSES.load(Ordering::Relaxed)
+}
+
+/// Сочетания, которые питомец слышит. Raw Input присылает копию нажатий, поэтому у других
+/// программ они не отбираются: кому ещё нужны, тот их тоже получит.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hotkey {
+    /// Ctrl+Alt+H — «босс идёт»: спрятать питомца со всем хозяйством, повторно — вернуть.
+    Boss,
+    /// PrintScreen или Win+Shift+S: снимают экран — кошка позирует.
+    Shot,
+}
+
+const VK_SHIFT: u16 = 0x10;
+const VK_CONTROL: u16 = 0x11;
+const VK_MENU: u16 = 0x12;
+const VK_SNAPSHOT: u16 = 0x2C;
+const VK_H: u16 = 0x48;
+const VK_S: u16 = 0x53;
+const VK_LWIN: u16 = 0x5B;
+const VK_RWIN: u16 = 0x5C;
+
+/// Какие модификаторы зажаты в момент нажатия.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Mods {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub win: bool,
+}
+
+/// Сочетание по клавише. PrintScreen — по отпусканию: нажатие этой клавиши приходит не со всех
+/// клавиатур, а отпускание — со всех. Остальное — по нажатию, без автоповтора (`repeat`).
+pub fn hotkey(vkey: u16, down: bool, repeat: bool, m: Mods) -> Option<Hotkey> {
+    if vkey == VK_SNAPSHOT && !down {
+        return Some(Hotkey::Shot);
+    }
+    if !down || repeat {
+        return None;
+    }
+    match vkey {
+        VK_S if m.win && m.shift && !m.ctrl && !m.alt => Some(Hotkey::Shot),
+        VK_H if m.ctrl && m.alt && !m.shift && !m.win => Some(Hotkey::Boss),
+        _ => None,
+    }
+}
+
+fn mods() -> Mods {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    // SAFETY: только читает состояние клавиши.
+    let held = |vk: u16| unsafe { GetAsyncKeyState(vk as i32) } < 0;
+    Mods { ctrl: held(VK_CONTROL), alt: held(VK_MENU), shift: held(VK_SHIFT), win: held(VK_LWIN) || held(VK_RWIN) }
+}
+
+type HotkeyFn = Box<dyn Fn(Hotkey) + Send + Sync>;
+static ON_HOTKEY: OnceLock<HotkeyFn> = OnceLock::new();
+/// Последняя зажатая клавиша: её повторные нажатия — автоповтор, а не новое сочетание.
+static LAST_DOWN: AtomicU16 = AtomicU16::new(0);
+
+/// Кого звать, когда нажали сочетание. Зовётся из потока ввода — пусть отдаёт работу дальше.
+pub fn on_hotkey(f: impl Fn(Hotkey) + Send + Sync + 'static) {
+    let _ = ON_HOTKEY.set(Box::new(f));
+}
+
+/// «Босс идёт»: питомец спрятан. Лазер в это время тоже не зажигается.
+static BOSS: AtomicBool = AtomicBool::new(false);
+
+pub fn bossed() -> bool {
+    BOSS.load(Ordering::Relaxed)
+}
+
+/// Переключить «босса»; возвращает, спрятан ли питомец теперь.
+pub fn toggle_boss() -> bool {
+    !BOSS.fetch_xor(true, Ordering::Relaxed)
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -114,6 +187,7 @@ unsafe fn handle_input(h: HRAWINPUT) {
     }
     let raw = &*(buf.as_ptr() as *const RAWINPUT);
     let Some(sink) = SINK.get() else { return };
+    let mut hot = None;
     let Ok(mut t) = sink.lock() else { return };
     match raw.header.dwType {
         RIM_TYPEKEYBOARD => {
@@ -123,6 +197,16 @@ unsafe fn handle_input(h: HRAWINPUT) {
                 PRESSES.fetch_add(1, Ordering::Relaxed);
             }
             t.on_key(kb.VKey, down);
+            let repeat = if down {
+                LAST_DOWN.swap(kb.VKey, Ordering::Relaxed) == kb.VKey
+            } else {
+                let _ = LAST_DOWN.compare_exchange(kb.VKey, 0, Ordering::Relaxed, Ordering::Relaxed);
+                false
+            };
+            // модификаторы спрашиваем, только когда клавиша может быть частью сочетания
+            if matches!(kb.VKey, VK_SNAPSHOT | VK_H | VK_S) {
+                hot = hotkey(kb.VKey, down, repeat, mods());
+            }
         }
         RIM_TYPEMOUSE => {
             let m = raw.data.mouse;
@@ -139,6 +223,11 @@ unsafe fn handle_input(h: HRAWINPUT) {
             }
         }
         _ => {}
+    }
+    // трекер отпускаем до вызова: обработчик трогает окна и не должен держать ввод
+    drop(t);
+    if let (Some(h), Some(f)) = (hot, ON_HOTKEY.get()) {
+        f(h);
     }
 }
 
@@ -295,9 +384,65 @@ pub fn quiet() -> Quiet {
     }
 }
 
+/// Ноутбук работает от батареи: кошка бережёт силы и спит чаще. Без батареи или непонятно — false.
+pub fn on_battery() -> bool {
+    use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+    // SAFETY: структура из чисел, нули в ней допустимы.
+    let mut s: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
+    // SAFETY: функция только пишет состояние в переданную структуру.
+    if unsafe { GetSystemPowerStatus(&mut s) } == 0 {
+        return false;
+    }
+    // ACLineStatus: 0 — от батареи, 1 — от сети, 255 — не известно
+    s.ACLineStatus == 0
+}
+
+/// Сколько всего лежит в корзине на всех дисках; None — Windows не ответила.
+/// Имена файлов не смотрим, только число.
+pub fn bin_items() -> Option<i64> {
+    use windows_sys::Win32::UI::Shell::{SHQueryRecycleBinW, SHQUERYRBINFO};
+    // SAFETY: структура из чисел, нули в ней допустимы.
+    let mut info: SHQUERYRBINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHQUERYRBINFO>() as u32;
+    // SAFETY: пустой путь — все диски; функция только пишет в переданную структуру.
+    let hr = unsafe { SHQueryRecycleBinW(std::ptr::null(), &mut info) };
+    (hr >= 0).then_some(info.i64NumItems)
+}
+
+/// Корзину очистили: было что-то, стало пусто. Неизвестное состояние ни с чем не сравниваем.
+pub fn bin_emptied(before: Option<i64>, now: Option<i64>) -> bool {
+    matches!((before, now), (Some(b), Some(0)) if b > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bin_emptied_only_on_drop_to_zero() {
+        assert!(bin_emptied(Some(3), Some(0)));
+        assert!(!bin_emptied(Some(0), Some(0)));
+        assert!(!bin_emptied(Some(3), Some(1)));
+        assert!(!bin_emptied(None, Some(0)));
+        assert!(!bin_emptied(Some(3), None));
+    }
+
+    #[test]
+    fn hotkeys() {
+        let none = Mods::default();
+        let ctrl_alt = Mods { ctrl: true, alt: true, ..none };
+        let win_shift = Mods { win: true, shift: true, ..none };
+        assert_eq!(hotkey(VK_SNAPSHOT, false, false, none), Some(Hotkey::Shot));
+        assert_eq!(hotkey(VK_SNAPSHOT, true, false, none), None);
+        assert_eq!(hotkey(VK_S, true, false, win_shift), Some(Hotkey::Shot));
+        assert_eq!(hotkey(VK_S, true, false, Mods { shift: true, ..none }), None);
+        assert_eq!(hotkey(VK_H, true, false, ctrl_alt), Some(Hotkey::Boss));
+        // автоповтор и отпускание не переключают «босса» туда-обратно
+        assert_eq!(hotkey(VK_H, true, true, ctrl_alt), None);
+        assert_eq!(hotkey(VK_H, false, false, ctrl_alt), None);
+        assert_eq!(hotkey(VK_H, true, false, Mods { shift: true, ..ctrl_alt }), None);
+        assert_eq!(hotkey(VK_H, true, false, none), None);
+    }
 
     #[test]
     fn exe_stem_drops_dir_and_extension() {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaults, parse, serialize } from './settings';
+import { cleanName, defaults, NAME_MAX, NAMES, parse, serialize, suggestName } from './settings';
 
 describe('настройки', () => {
   it('по умолчанию осторожная версия, но от записи экрана прячемся', () => {
@@ -37,6 +37,24 @@ describe('настройки', () => {
       hunterArea: 'taskbar',
       feeder: true,
     });
+  });
+
+  it('имя: старые настройки без имени — пусто, мусор вычищается', () => {
+    expect(parse('{"feeder":true}').name).toBe('');
+    expect(parse('{"name":42}').name).toBe('');
+    expect(parse(JSON.stringify({ name: '  Мурка  ' })).name).toBe('Мурка');
+    expect(cleanName('Му\u0000р\nка  Пуш')).toBe('Мурка Пуш');
+    expect([...cleanName('я'.repeat(50))]).toHaveLength(NAME_MAX);
+    // эмодзи не режется посередине
+    expect(cleanName('🐱'.repeat(30))).toBe('🐱'.repeat(NAME_MAX));
+  });
+
+  it('«Другое» предлагает имя из списка и не то же самое', () => {
+    for (let i = 0; i < 20; i++) {
+      const n = suggestName(() => i / 20, 'Мурка');
+      expect(NAMES).toContain(n);
+      expect(n).not.toBe('Мурка');
+    }
   });
 
   it('темы — в порядке списка и без повторов', () => {

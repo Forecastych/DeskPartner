@@ -4,7 +4,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { open } from '@tauri-apps/plugin-dialog';
   import { onMount, tick } from 'svelte';
-  import { defaults, serialize } from './lib/settings';
+  import { defaults, serialize, suggestName } from './lib/settings';
   import { dirHint, errorText, isDriveRoot, pickDir } from './lib/setup';
   import SettingsFields from './SettingsFields.svelte';
   import { Button, Dialog, Group, Hint, Radio, TextInput } from './ui';
@@ -12,7 +12,8 @@
   const TITLES = ['Где хранить данные', 'Питомец и темы', 'Главные галочки'];
 
   let step = $state(0);
-  let settings = $state(defaults());
+  // имя сразу предложено: стереть проще, чем придумать с нуля
+  let settings = $state({ ...defaults(), name: suggestName(Math.random) });
   let dir = $state('');
   let suggested = $state<string[]>([]);
   /** Корень диска, вместо которого подставили `X:\DeskPartner`; показываем, чтобы можно было отказаться. */

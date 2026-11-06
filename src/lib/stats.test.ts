@@ -46,6 +46,21 @@ describe('stats', () => {
     expect(tick(s, -5, true, true)).toBe(s);
   });
 
+  it('часы активности копятся по часу суток и переживают сохранение', () => {
+    let s = fresh(NOW);
+    s = tick(s, 1000, true, false, 22);
+    s = tick(s, 1000, true, false, 22);
+    s = tick(s, 1000, true, false);
+    s = tick(s, 1000, false, false, 9);
+    s = tick(s, 1000, true, false, 99);
+    expect(s.hours[22]).toBe(2000);
+    expect(s.hours.reduce((a, b) => a + b, 0)).toBe(2000);
+    expect(load(save(s), NOW).hours).toEqual(s.hours);
+    // битые часы — нули, а не NaN
+    expect(load('{"hours":[1,"x",-3,null]}', NOW).hours.slice(0, 4)).toEqual([1, 0, 0, 0]);
+    expect(load('{"hours":"oops"}', NOW).hours).toHaveLength(24);
+  });
+
   it('склоняет числа', () => {
     const f: [string, string, string] = ['день', 'дня', 'дней'];
     expect([0, 1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 101, 111].map((n) => plural(n, f))).toEqual([

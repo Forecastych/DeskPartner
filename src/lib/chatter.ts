@@ -93,6 +93,8 @@ export interface Moment {
   topics: readonly Topic[];
   /** Свежие факты дня по темам (из сети); их — раньше встроенных. */
   extra?: Partial<Record<Topic, readonly string[]>>;
+  /** Имя питомца; пусто — реплики с {name} не звучат. */
+  name?: string;
 }
 
 export interface Line {
@@ -102,8 +104,8 @@ export interface Line {
 }
 
 const HUNGRY = ['Мяу… Миска пустая.', 'Есть хочу. Клик по миске?'];
-const WORK = ['Ты молодец.', 'Я тут, рядом.', 'Хорошо работаем.', 'Мур. Не отвлекаю.'];
-const REST = ['Мур.', 'Хорошо сидим.', 'Погладишь?', 'А я бы вздремнула.', 'Мяу!', 'Ничего не происходит. Красота.'];
+const WORK = ['Ты молодец.', 'Я тут, рядом.', 'Хорошо работаем.', 'Мур. Не отвлекаю.', '{name} на посту.'];
+const REST = ['Мур.', 'Хорошо сидим.', 'Погладишь?', 'А я бы вздремнула.', 'Мяу!', 'Ничего не происходит. Красота.', 'Мяу! Это я, {name}.'];
 const TODAY = 'Сегодня мы за компом уже {today}.';
 const CARE = 'Уже {session} без перерыва. Потянемся?';
 const PRAISE = '{session} в фокусе. Ты молодец.';
@@ -165,7 +167,13 @@ function fill(text: string, m: Moment): string {
   return text
     .replace('{time}', `${m.now.getHours()}:${p(m.now.getMinutes())}`)
     .replace('{session}', duration(m.session))
-    .replace('{today}', duration(m.today));
+    .replace('{today}', duration(m.today))
+    .replace('{name}', m.name ?? '');
+}
+
+/** Реплики с именем — только если питомца назвали. */
+function named(list: readonly string[], m: Moment): readonly string[] {
+  return m.name ? list : list.filter((t) => !t.includes('{name}'));
 }
 
 /** Случайная из списка, но не та же, что в прошлый раз. */
@@ -248,7 +256,7 @@ export function say(talk: Talk, m: Moment, level: Chatter, rand: () => number): 
       const f = line ? null : fact(t, m, rand);
       if (f) [line, told] = f;
       if (!line && m.today >= 3600 && rand() < 0.2) line = { key: 'today', text: TODAY };
-      line ??= { key: isWork(m.now) ? 'work' : 'rest', text: any(isWork(m.now) ? WORK : REST, t.last, rand) };
+      line ??= { key: isWork(m.now) ? 'work' : 'rest', text: any(named(isWork(m.now) ? WORK : REST, m), t.last, rand) };
     }
   }
   if (!line) return [t, null];

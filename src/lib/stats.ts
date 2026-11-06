@@ -2,6 +2,9 @@
 // никаких названий программ и фильмов: файл лежит в папке данных и никуда не уходит.
 // Копит окно кошки (App.svelte), показывает окно «Статистика» (Stats.svelte).
 
+import * as affection from './affection';
+import * as chrono from './chrono';
+
 /** Время копится шагами кадра; больше этого за шаг не засчитываем — компьютер спал, а не мы вместе. */
 export const MAX_STEP_MS = 60_000;
 
@@ -29,16 +32,22 @@ export const COUNTERS = [
   'calls',
   /** Ушла насовсем от голода. */
   'runaways',
+  /** Сколько тортиков за время вместе уже отмечено (holidays.ts). */
+  'cakes',
+  /** Сколько годовщин уже отмечено. */
+  'years',
 ] as const;
 export type Counter = (typeof COUNTERS)[number];
 
 export type Stats = Record<Counter, number> & {
   /** С какого момента считаем, мс. Старые файлы без даты начинают отсчёт с первой загрузки. */
   since: number;
+  /** Мс, когда человек за компьютером и кошка дома, по часам суток 0..23 — для хронотипа. */
+  hours: number[];
 };
 
 export function fresh(now: number): Stats {
-  const s = { since: now } as Stats;
+  const s = { since: now, hours: Array(24).fill(0) } as Stats;
   for (const k of COUNTERS) s[k] = 0;
   return s;
 }
@@ -59,6 +68,12 @@ export function load(raw: string | null, now: number): Stats {
   }
   const since = Number(o.since);
   if (Number.isFinite(since) && since > 0 && since <= now) s.since = since;
+  if (Array.isArray(o.hours)) {
+    s.hours = s.hours.map((_, h) => {
+      const v = Number((o.hours as unknown[])[h]);
+      return Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+    });
+  }
   return s;
 }
 
@@ -66,11 +81,19 @@ export function save(s: Stats): string {
   return JSON.stringify(s);
 }
 
-/** Шаг кадра: дома — время вместе, на засчитанном сеансе — ещё и время кино. */
-export function tick(s: Stats, ms: number, home: boolean, film: boolean): Stats {
+/**
+ * Шаг кадра: дома — время вместе, на засчитанном сеансе — ещё и время кино.
+ * `hour` 0..23 — человек за компьютером в этот час (для хронотипа); -1 — отошёл.
+ */
+export function tick(s: Stats, ms: number, home: boolean, film: boolean, hour = -1): Stats {
   const dt = Math.min(Math.max(ms, 0), MAX_STEP_MS) || 0;
   if (!home || dt === 0) return s;
-  return { ...s, together: s.together + dt, filmMs: film ? s.filmMs + dt : s.filmMs };
+  const n = { ...s, together: s.together + dt, filmMs: film ? s.filmMs + dt : s.filmMs };
+  if (Number.isInteger(hour) && hour >= 0 && hour < 24) {
+    n.hours = s.hours.slice();
+    n.hours[hour] += dt;
+  }
+  return n;
 }
 
 /** 1 раз, 2 раза, 5 раз, 11 раз, 21 раз. */
@@ -119,6 +142,8 @@ export interface Row {
   value: string;
   /** Мелкая приписка под цифрой. */
   hint?: string;
+  /** Шкала под цифрой, 0..1. */
+  meter?: number;
 }
 
 export interface Group {
@@ -136,11 +161,13 @@ function times(n: number): string {
 export function groups(s: Stats, now: number): Group[] {
   const n = days(s.since, now);
   const caught = s.mice > 0 ? `поймана ${s.caught} из ${s.mice}` : undefined;
+  const love = affection.level(s);
   return [
     {
       title: 'Вместе',
       rows: [
         { label: 'Знакомы', value: `${n} ${plural(n, ['день', 'дня', 'дней'])}`, hint: `с ${date(s.since)}` },
+        { label: 'Привязанность', value: `${love} из 100`, hint: affection.word(love), meter: love / 100 },
         { label: 'Рядом на экране', value: duration(s.together) },
         { label: 'Кино вместе', value: `${s.films} ${plural(s.films, ['фильм', 'фильма', 'фильмов'])}`, hint: s.filmMs > 0 ? duration(s.filmMs) : undefined },
       ],
@@ -171,6 +198,7 @@ export function groups(s: Stats, now: number): Group[] {
     {
       title: 'Характер',
       rows: [
+        { label: 'Режим дня', ...chrono.describe(chrono.kind(s.hours)) },
         { label: 'Мстила', value: times(s.revenges), hint: s.puddles > 0 ? `луж: ${s.puddles}` : undefined },
         { label: 'Пряталась от созвонов', value: times(s.calls) },
         { label: 'Облачков с мыслями', value: `${s.said}` },

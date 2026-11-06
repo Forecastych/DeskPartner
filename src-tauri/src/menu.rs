@@ -13,6 +13,7 @@
 //! меряет себя и присылает размер (menu_size), а Rust ставит его у курсора в пределах рабочей
 //! области монитора и показывает. Выбрали пункт — menu_pick, владельцу уходит "menu-pick" { id };
 //! закрыли иначе (клик мимо, Esc, другое окно, новое меню, close_menu) — "menu-close".
+//! Меню трея — то же окно: системное выбивалось бы из пиксельного стиля.
 
 use crate::world::Rect;
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,9 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 const LABEL: &str = "menu";
+
+/// Владелец-трей: окна у него нет, выбранный пункт уходит в lib.rs (tray_pick), а не событием.
+pub const TRAY: &str = "tray";
 
 /// Как часто смотреть на мышь и клавиши, пока меню открыто: клик длится дольше 15 мс.
 const POLL: Duration = Duration::from_millis(15);
@@ -98,7 +102,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 /// Открыть меню у курсора. Открытое прежде закрывается, его владелец получает "menu-close".
 #[tauri::command]
 pub async fn open_menu(app: AppHandle, owner: String, items: Vec<Item>) -> Result<(), String> {
-    let w = window(&app)?;
+    open(&app, owner, items)
+}
+
+/// То же для Rust: трей открывает меню отсюда, без окна-владельца.
+pub fn open(app: &AppHandle, owner: String, items: Vec<Item>) -> Result<(), String> {
+    let w = window(app)?;
     let hwnd = sys::hwnd(&w)?;
     let at = sys::cursor().unwrap_or_default();
     let state = app.state::<MenuState>();
@@ -115,7 +124,7 @@ pub async fn open_menu(app: AppHandle, owner: String, items: Vec<Item>) -> Resul
         (prev, s.gen)
     };
     if let Some(prev) = prev {
-        tell(&app, &prev, "menu-close", ());
+        tell(app, &prev, "menu-close", ());
     }
     w.emit_to(LABEL, "menu-items", Show { gen, items }).map_err(|e| e.to_string())
 }
@@ -158,8 +167,10 @@ pub async fn menu_pick(app: AppHandle, gen: u64, id: String) -> Result<(), Strin
         s.rect = None;
         s.owner.take()
     };
-    if let Some(owner) = owner {
-        tell(&app, &owner, "menu-pick", Pick { id });
+    match owner.as_deref() {
+        Some(TRAY) => crate::tray_pick(&app, &id),
+        Some(owner) => tell(&app, owner, "menu-pick", Pick { id }),
+        None => {}
     }
     Ok(())
 }
@@ -176,6 +187,10 @@ fn window(app: &AppHandle) -> Result<WebviewWindow, String> {
 }
 
 fn tell<S: Serialize + Clone>(app: &AppHandle, owner: &str, event: &str, payload: S) {
+    // у трея окна нет: его выбор уходит в tray_pick, а закрытие ему не интересно
+    if owner == TRAY {
+        return;
+    }
     if let Err(err) = app.emit_to(owner, event, payload) {
         eprintln!("{event}: {err}");
     }

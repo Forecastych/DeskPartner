@@ -5,6 +5,7 @@
   import { emitTo } from '@tauri-apps/api/event';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { onMount } from 'svelte';
+  import { parse } from './lib/settings';
   import * as tally from './lib/stats';
   import { Dialog, Hint, Section } from './ui';
 
@@ -15,12 +16,16 @@
 
   let stats = $state<tally.Stats | null>(null);
   let now = $state(Date.now());
+  let name = $state('');
   /** Кошка ответила: дальше файл не нужен, он отстаёт до сохранения. */
   let live = false;
 
   const groups = $derived(stats ? tally.groups(stats, now) : []);
 
   onMount(() => {
+    invoke<string | null>('load_state', { key: 'settings' })
+      .then((raw) => (name = parse(raw).name))
+      .catch(console.error);
     invoke<string | null>('load_state', { key: 'stats' })
       .then((raw) => {
         if (!live) stats = tally.load(raw, Date.now());
@@ -42,7 +47,7 @@
   });
 </script>
 
-<Dialog title="Статистика">
+<Dialog title={name ? `${name}: статистика` : 'Статистика'}>
   {#if stats}
     {#each groups as g, i (g.title)}
       <Section title={g.title} rule={i > 0}>
@@ -52,6 +57,11 @@
               <dt>{r.label}</dt>
               <dd>
                 <span class="value">{r.value}</span>
+                {#if r.meter !== undefined}
+                  <span class="meter ui-px" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(r.meter * 100)} aria-label={r.label}>
+                    <i style:width="{Math.round(Math.min(Math.max(r.meter, 0), 1) * 100)}%"></i>
+                  </span>
+                {/if}
                 {#if r.hint}<span class="hint">{r.hint}</span>{/if}
               </dd>
             </div>
@@ -95,6 +105,17 @@
   .hint {
     color: var(--ui-muted);
     font-size: 12px;
+  }
+  .meter {
+    display: block;
+    height: var(--ui-s2);
+    margin: var(--ui-s1) 0;
+    background: var(--ui-soft);
+  }
+  .meter i {
+    display: block;
+    height: 100%;
+    background: var(--ui-accent);
   }
   @media (prefers-color-scheme: dark) {
     .value {

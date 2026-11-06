@@ -1,8 +1,8 @@
 <script lang="ts">
   // Поля настроек — одни и те же в мастере первого запуска (по шагу на part) и в окне настроек.
   // Вид — из src/ui; здесь только раскладка.
-  import { CHATTER, HUNTER_AREAS, MODES, TOPICS, type Chatter, type HunterArea, type Mode, type Settings, type Topic } from './lib/settings';
-  import { Check, Group, Hint, Radio, TextInput } from './ui';
+  import { CHATTER, HUNTER_AREAS, MODES, NAME_MAX, TOPICS, suggestName, type Chatter, type HunterArea, type Mode, type Settings, type Topic } from './lib/settings';
+  import { Button, Check, Group, Hint, Radio, TextInput } from './ui';
 
   interface Props {
     settings: Settings;
@@ -58,6 +58,13 @@
       {/each}
     </div>
   </Group>
+
+  <TextInput id="name" label="Как зовут" bind:value={settings.name} maxlength={NAME_MAX} spellcheck="false" autocomplete="off" {disabled}>
+    <Button onclick={() => (settings.name = suggestName(Math.random, settings.name))} {disabled}>Другое</Button>
+  </TextInput>
+  {#if !settings.name.trim()}
+    <Hint>Без имени питомец обойдётся, но с ним веселее: имя будет в меню и в облачках.</Hint>
+  {/if}
 
   <Group legend="О чём рассказывать факты">
     <Hint>Можно выбрать несколько{wizard ? '; список потом меняется в настройках' : ''}.</Hint>

@@ -28,8 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tracker::{Day, Now, Pace, Tracker};
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 /// Во сколько раз увеличиваем пиксель арта при масштабе Windows 100%.
@@ -70,6 +69,9 @@ struct SensesNow {
     /// Только да/нет: какие программы держат микрофон, фронтенду знать незачем.
     #[cfg(windows)]
     call: bool,
+    /// Ноутбук от батареи: кошка спит чаще.
+    #[cfg(windows)]
+    battery: bool,
 }
 
 /// Маска текущего кадра того окна, которое её прислало.
@@ -103,6 +105,8 @@ fn senses(s: State<'_, Arc<Senses>>) -> SensesNow {
         media: s.media.lock().unwrap().clone(),
         #[cfg(windows)]
         call: s.call.load(Ordering::Relaxed),
+        #[cfg(windows)]
+        battery: win::on_battery(),
     }
 }
 
@@ -110,15 +114,20 @@ fn senses(s: State<'_, Arc<Senses>>) -> SensesNow {
 #[cfg(windows)]
 const CALL_TICKS: u64 = 2;
 
+/// Корзина опрашивается раз в столько тиков: очистку замечаем не сразу, но без суеты.
+#[cfg(windows)]
+const BIN_TICKS: u64 = 5;
+
 /// Сырой ввод и тик раз в секунду: чистое время, программы, сессии, созвон.
 #[cfg(windows)]
-fn start_senses(s: Arc<Senses>) {
+fn start_senses(s: Arc<Senses>, pet: AppHandle) {
     win::start_input(s.tracker.clone());
     media::start(s.media.clone());
     std::thread::Builder::new()
         .name("senses-tick".into())
         .spawn(move || {
             let mut fg = win::Foreground::new();
+            let mut bin = win::bin_items();
             for n in 0u64.. {
                 std::thread::sleep(std::time::Duration::from_secs(1));
                 let app = fg.current();
@@ -128,6 +137,16 @@ fn start_senses(s: Arc<Senses>) {
                 // реестр и снимок процессов — через тик: фронтенд и сам спрашивает раз в 2 с
                 if n % CALL_TICKS == 0 {
                     s.call.store(call::now(), Ordering::Relaxed);
+                }
+                // очистили корзину — кошка хрумкает выброшенным
+                if n % BIN_TICKS == 0 {
+                    let now = win::bin_items();
+                    if win::bin_emptied(bin, now) {
+                        if let Err(err) = pet.emit_to("pet", "crunch", ()) {
+                            eprintln!("crunch: {err}");
+                        }
+                    }
+                    bin = now;
                 }
             }
         })
@@ -291,62 +310,130 @@ fn move_data_dir(app: AppHandle, dir: String) -> Result<(), String> {
 /// процесса: аргументы командной строки request_restart передаёт прежние, добавить нечего.
 const REOPEN_SETTINGS: &str = "DESKPARTNER_REOPEN_SETTINGS";
 
-fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    // кошка умеет уходить за край экрана — отсюда её зовут обратно
-    let call = MenuItem::with_id(app, "call", "Позвать питомца", true, None::<&str>)?;
-    // некормленый кот уходит навсегда — без этого пункта вернуть питомца было бы нечем
-    let adopt = MenuItem::with_id(app, "adopt", "Новый котик", true, None::<&str>)?;
-    let stats = MenuItem::with_id(app, "stats", "Статистика…", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "Настройки…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&call, &adopt, &stats, &settings, &quit])?;
-    // проверить облачко, не дожидаясь паузы и срока; в релизную сборку не попадает
-    #[cfg(debug_assertions)]
-    menu.insert(&MenuItem::with_id(app, "dev-say", "Сказать что-нибудь (dev)", true, None::<&str>)?, 0)?;
-    // проверить поход к миске, не дожидаясь двух часов голода
-    #[cfg(debug_assertions)]
-    menu.insert(&MenuItem::with_id(app, "dev-hungry", "Проголодаться (dev)", true, None::<&str>)?, 1)?;
-    // запустить погоню за мышью сейчас, не дожидаясь срока; охотник выключен — включит
-    #[cfg(debug_assertions)]
-    menu.insert(&MenuItem::with_id(app, "dev-hunter", "Охотник (dev)", true, None::<&str>)?, 2)?;
-    // вынести клубок сейчас; выключен — включит
-    #[cfg(debug_assertions)]
-    menu.insert(&MenuItem::with_id(app, "dev-yarn", "Клубок (dev)", true, None::<&str>)?, 3)?;
-    // показать новость по темам сейчас, не дожидаясь срока факта
-    #[cfg(debug_assertions)]
-    menu.insert(&MenuItem::with_id(app, "dev-news", "Новость (dev)", true, None::<&str>)?, 4)?;
-    // отомстить сейчас: обида без шанса и перезарядки; в «не мешать» и на созвоне всё равно нет
-    #[cfg(debug_assertions)]
-    menu.insert(&MenuItem::with_id(app, "dev-revenge", "Месть (dev)", true, None::<&str>)?, 5)?;
-    let mut tray = TrayIconBuilder::with_id("main")
-        .tooltip("DeskPartner")
-        .menu(&menu)
-        .on_menu_event(|app, e| match e.id().as_ref() {
-            id @ ("call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn" | "dev-news" | "dev-revenge") => {
-                if let Err(err) = app.emit_to("pet", id, ()) {
-                    eprintln!("{id}: {err}");
+/// Имя питомца для трея: его присылает окно кошки (name_pet), когда читает или меняет настройки.
+static PET_NAME: Mutex<String> = Mutex::new(String::new());
+
+/// Окно кошки сообщило имя из настроек: шапка меню трея и подсказка у значка.
+#[tauri::command]
+async fn name_pet(app: AppHandle, name: String) {
+    let name: String = name.trim().chars().take(20).collect();
+    let tip = if name.is_empty() { "DeskPartner".to_string() } else { format!("DeskPartner · {name}") };
+    *PET_NAME.lock().unwrap() = name;
+    if let Some(tray) = app.tray_by_id("main") {
+        if let Err(err) = tray.set_tooltip(Some(tip)) {
+            eprintln!("tray tooltip: {err}");
+        }
+    }
+}
+
+/// «Босс идёт»: спрятать питомца, миску, лежак, мышь и лужу или вернуть их. Облачко и меню
+/// окно кошки убирает само, получив "boss"; на это время оно молчит.
+#[cfg(windows)]
+fn boss(app: &AppHandle) {
+    let hidden = win::toggle_boss();
+    for w in SPRITES.iter().chain(["puddle"].iter()).filter_map(|l| app.get_webview_window(l)) {
+        let done = if hidden { w.hide() } else { w.show() };
+        if let Err(err) = done {
+            eprintln!("boss {}: {err}", w.label());
+        }
+    }
+    if let Err(err) = app.emit_to("pet", "boss", hidden) {
+        eprintln!("boss: {err}");
+    }
+}
+
+/// Пункты меню трея: то же пиксельное меню, что у кошки по ПКМ (menu.rs).
+fn tray_items() -> Vec<menu::Item> {
+    let entry = |id: &str, text: &str, hint: Option<&str>| menu::Item::Entry {
+        id: id.into(),
+        text: text.into(),
+        checked: None,
+        hint: hint.map(Into::into),
+        disabled: false,
+    };
+    let mut items = Vec::new();
+    // проверить облачко, голод, мышь, клубок, новость и месть, не дожидаясь сроков; в релиз не попадает
+    if cfg!(debug_assertions) {
+        items.extend([
+            entry("dev-say", "Сказать что-нибудь (dev)", None),
+            entry("dev-hungry", "Проголодаться (dev)", None),
+            // охотник или клубок выключен — включит
+            entry("dev-hunter", "Охотник (dev)", None),
+            entry("dev-yarn", "Клубок (dev)", None),
+            entry("dev-news", "Новость (dev)", None),
+            // обида без шанса и перезарядки; в «не мешать» и на созвоне всё равно нет
+            entry("dev-revenge", "Месть (dev)", None),
+            menu::Item::Separator { separator: true },
+        ]);
+    }
+    let name = PET_NAME.lock().unwrap().clone();
+    if !name.is_empty() {
+        // шапка с именем, как в меню кошки; ведёт в статистику
+        items.extend([entry("stats", &name, None), menu::Item::Separator { separator: true }]);
+    }
+    items.extend([
+        // кошка умеет уходить за край экрана — отсюда её зовут обратно
+        entry("call", "Позвать питомца", Some("если ушла за край экрана")),
+        // некормленый кот уходит навсегда — без этого пункта вернуть питомца было бы нечем
+        entry("adopt", "Новый котик", Some("если прежний сбежал")),
+    ]);
+    #[cfg(windows)]
+    items.push(if win::bossed() {
+        entry("boss", "Показать питомца", Some("Ctrl+Alt+H"))
+    } else {
+        entry("boss", "Спрятать питомца", Some("Ctrl+Alt+H — и обратно"))
+    });
+    items.extend([
+        menu::Item::Separator { separator: true },
+        entry("stats", "Статистика…", None),
+        entry("settings", "Настройки…", None),
+        menu::Item::Separator { separator: true },
+        entry("quit", "Выход", None),
+    ]);
+    items
+}
+
+/// Выбрали пункт в меню трея (menu.rs зовёт сюда вместо события окну).
+pub(crate) fn tray_pick(app: &AppHandle, id: &str) {
+    match id {
+        "call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn" | "dev-news" | "dev-revenge" => {
+            if let Err(err) = app.emit_to("pet", id, ()) {
+                eprintln!("{id}: {err}");
+            }
+        }
+        // окна строим из пула, как в open_settings: из главного потока на Windows нельзя (wry#583)
+        "settings" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = show_settings(&app) {
+                    eprintln!("settings: {err}");
                 }
+            });
+        }
+        "stats" => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) = show_stats(&app) {
+                    eprintln!("stats: {err}");
+                }
+            });
+        }
+        #[cfg(windows)]
+        "boss" => boss(app),
+        "quit" => app.exit(0),
+        _ => {}
+    }
+}
+
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    // системного меню у значка нет: по любой кнопке открываем своё, пиксельное
+    let mut tray = TrayIconBuilder::with_id("main").tooltip("DeskPartner").on_tray_icon_event(|tray, e| {
+        if let TrayIconEvent::Click { button_state: MouseButtonState::Up, .. } = e {
+            if let Err(err) = menu::open(tray.app_handle(), menu::TRAY.into(), tray_items()) {
+                eprintln!("tray menu: {err}");
             }
-            // обработчик меню идёт в главном потоке — окно строим из пула, как в open_settings
-            "settings" => {
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(err) = show_settings(&app) {
-                        eprintln!("settings: {err}");
-                    }
-                });
-            }
-            "stats" => {
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(err) = show_stats(&app) {
-                        eprintln!("stats: {err}");
-                    }
-                });
-            }
-            "quit" => app.exit(0),
-            _ => {}
-        });
+        }
+    });
     if let Some(icon) = app.default_window_icon() {
         tray = tray.icon(icon.clone());
     }
@@ -378,6 +465,7 @@ pub fn run() {
             open_settings,
             open_stats,
             move_data_dir,
+            name_pet,
             menu::open_menu,
             menu::menu_size,
             menu::menu_pick,
@@ -412,7 +500,18 @@ pub fn run() {
         ])
         .setup(move |app| {
             #[cfg(windows)]
-            start_senses(feel);
+            {
+                let h = app.handle().clone();
+                win::on_hotkey(move |k| match k {
+                    win::Hotkey::Boss => boss(&h),
+                    win::Hotkey::Shot => {
+                        if let Err(err) = h.emit_to("pet", "shot", ()) {
+                            eprintln!("shot: {err}");
+                        }
+                    }
+                });
+                start_senses(feel, app.handle().clone());
+            }
             news::start();
             // снимаем сразу: следующий перезапуск (или программа, которую питомец запустит) её не унаследует
             let reopen = std::env::var_os(REOPEN_SETTINGS).is_some();

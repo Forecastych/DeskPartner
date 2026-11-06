@@ -16,7 +16,9 @@
   import { parse, serialize, TOPICS, type Chatter, type HunterArea, type Settings, type Topic } from './lib/settings';
   import * as sleepy from './lib/sleep';
   import * as tally from './lib/stats';
-  import { ANIMS, BOWL_X, bowlLeft, draw, fatOn, flip, ground, hitMask, onBowl, SCRUFF_AT, SIZE, type AnimName, type Frame } from './lib/sprite';
+  import * as chrono from './lib/chrono';
+  import * as holidays from './lib/holidays';
+  import { ANIMS, BOWL_X, bowlLeft, draw, dress, fatOn, flip, ground, hitMask, onBowl, SCRUFF_AT, SIZE, type AnimName, type Frame } from './lib/sprite';
   import { localLegacy, memoryStore, open, tauriBackend, type Store } from './lib/store';
   import * as wiki from './lib/wiki';
 
@@ -48,6 +50,23 @@
   const YARN_MAX = 120 * 60_000;
   /** Вернулась из-за края за мышью — столько облизывается. */
   const LICK_MS = 3000;
+  /** Экран был заблокирован хотя бы столько — после разблокировки радуется человеку. */
+  const LOCK_JOY_MS = 30_000;
+  /** Столько радуется: сердечко, как от ласки. */
+  const JOY_MS = 3000;
+  /**
+   * Ввод на экране блокировки трекер не видит: после пароля человек для него «отошёл», пока не
+   * тронет мышь (tracker.rs, IDLE_AFTER). Столько после разблокировки не скучаем.
+   */
+  const UNLOCK_GRACE_MS = 120_000;
+  /** Снимают экран — столько позирует. */
+  const POSE_MS = 4000;
+  /** Очистили корзину — столько хрумкает. */
+  const CRUNCH_MS = 3000;
+  /** Праздник: столько сидит у тортика. */
+  const CAKE_MS = 8000;
+  /** От батареи устаёт во столько раз быстрее: бережёт заряд и спит чаще. */
+  const BATTERY_TIRED = 1.5;
   /** Полки внутри окон перечитываются не чаще: детей у окон много, а мышь бегает долго. */
   const SHELVES_MS = 1000;
   /** Шаг движения: 25 раз в секунду — окно едет ровно, а Rust успевает его двигать. */
@@ -96,6 +115,8 @@
     app?: string | null;
     /** Только в Windows: идёт созвон — занят микрофон или камера, или Zoom показывает экран. Месть тоже молчит. */
     call?: boolean;
+    /** Только в Windows: ноутбук работает от батареи. */
+    battery?: boolean;
   }
 
   /** Файлы в папке, выбранной на первом запуске; до открытия — память, чтобы не ловить null. */
@@ -152,6 +173,8 @@
   let talk: chatter.Talk = chatter.fresh(Date.now(), chatterLevel, Math.random);
   /** О чём рассказывать факты; пусто — фактов нет. */
   let topics: Topic[] = [];
+  /** Имя из настроек: в облачках и шапке меню. */
+  let petName = '';
   /** Факты «В этот день» по темам — вперёд встроенных; пусто, пока Википедия не ответила. */
   let wikiFacts: Partial<Record<Topic, string[]>> = {};
   /** За какой день wikiFacts; другой — пора спросить снова. */
@@ -199,6 +222,18 @@
   let peekPending = false;
   let lastFilm = Date.now();
   let seenHuman = false;
+  /** До этих пор позирует для снимка экрана. */
+  let poseUntil = 0;
+  /** До этих пор хрумкает содержимым корзины. */
+  let crunchUntil = 0;
+  /** До этих пор празднует у тортика. */
+  let cakeUntil = 0;
+  /** «Босс идёт» (Ctrl+Alt+H или трей): окна спрятаны Rust'ом, кошка молчит и не затевает игр. */
+  let bossed = false;
+  /** Когда заблокировали экран (Win+L); 0 — не заблокирован. */
+  let lockedAt = 0;
+  /** До этих пор простой после разблокировки не считается «отошёл». */
+  let graceUntil = 0;
   let rest: AnimName = 'sit';
   let restUntil = 0;
   /** Поза сна выбирается при засыпании и держится до пробуждения. */
@@ -525,6 +560,12 @@
     return true;
   }
 
+  /** Во сколько раз быстрее копится усталость. */
+  /** Во сколько раз быстрее устаёт: от батареи и в «не свои» по хронотипу часы. */
+  function tired(): number {
+    return (senses?.battery ? BATTERY_TIRED : 1) * chrono.tired(stats.hours, new Date().getHours());
+  }
+
   /** Голод и сон живут по времени работы программы; их события превращаются в позы. */
   function live(now: number) {
     const dt = now - lastStep;
@@ -532,7 +573,7 @@
     const [next, event] = step(belly, dt);
     belly = next;
     if (event === 'gone') stats.runaways++;
-    stats = tally.tick(stats, dt, !away(), film.active);
+    stats = tally.tick(stats, dt, !away(), film.active, humanIdle ? -1 : new Date(now).getHours());
     if (event === 'eat') serve(now);
     // поела где-то там
     if (event === 'return') comeBack(now);
@@ -540,7 +581,7 @@
     // пока смотрит кино, сама не устаёт: когда уснуть на фильме, решает movie.ts. Видео уже
     // играет, но сеанс ещё не засчитан (START_MS) — тоже: иначе успеет уйти спать на лежак
     const watching = filming() && sleepy.mood(nap) === 'awake';
-    const [rested, mood] = watching ? [nap, null] : sleepy.step(nap, dt, humanIdle);
+    const [rested, mood] = watching ? [nap, null] : sleepy.step(nap, dt, humanIdle, tired());
     nap = rested;
     if (mood === 'sleep') {
       stats.naps++;
@@ -598,6 +639,7 @@
   function canHunt(now: number): boolean {
     return (
       hunterOn &&
+      !bossed &&
       !!pet &&
       !!world &&
       !carried &&
@@ -615,6 +657,7 @@
   function canYarn(now: number): boolean {
     return (
       yarnOn &&
+      !bossed &&
       !!pet &&
       !!world &&
       !carried &&
@@ -658,9 +701,11 @@
   }
 
   /** Можно ли мстить сейчас: «Шалости» (или трей dev-сборки), «не мешать» нет, созвона нет. */
-  const gate = (): revenge.Gate => ({ mode: revengeNow ? 'pranks' : mode, quiet: senses?.quiet, call: senses?.call });
+  const gate = (): revenge.Gate => ({ mode: revengeNow ? 'pranks' : mode, quiet: quietNow(), call: senses?.call });
   /** Мешать человеку можно вообще: лужа и начатая месть живут, только пока так. */
-  const unbothered = (): boolean => revenge.allowed({ mode: 'pranks', quiet: senses?.quiet, call: senses?.call });
+  const unbothered = (): boolean => revenge.allowed({ mode: 'pranks', quiet: quietNow(), call: senses?.call });
+  /** Почему не мешать: спрятанная от босса кошка тоже не мешает. */
+  const quietNow = (): string | undefined => (bossed ? 'boss' : senses?.quiet);
 
   /** Пустить мышь: кошка стоит без дела — не голодна, не умывается, не идёт спать в лежак. */
   function readyToHunt(now: number): boolean {
@@ -682,7 +727,10 @@
       !mealPending &&
       !bedBound &&
       now >= groomUntil &&
-      now >= pettedUntil
+      now >= pettedUntil &&
+      now >= poseUntil &&
+      now >= crunchUntil &&
+      now >= cakeUntil
     );
   }
 
@@ -743,6 +791,9 @@
     // «з-з-з» — только из-за края; пока не дошла, идёт
     if (mood === 'away') return pet && pet.move !== 'out' ? 'walk' : 'zzz';
     if (now < pettedUntil) return 'petted';
+    if (now < poseUntil) return 'pose';
+    if (now < crunchUntil) return 'crunch';
+    if (now < cakeUntil) return 'cake';
     if (now < lickUntil) return 'lick';
     if (now < eatUntil) return 'eat';
     if (mood === 'angry' || mood === 'groggy') return mood;
@@ -855,6 +906,7 @@
       hungry: isHungry(belly) && !mealPending,
       free: free(),
       topics,
+      name: petName,
       extra: held ? { ...wikiFacts, [held.topic]: [held.text, ...(wikiFacts[held.topic] ?? [])] } : wikiFacts,
     };
   }
@@ -895,7 +947,7 @@
 
   /** Сказать `text`; `about` — это новость, под ней будут лайк/диз. */
   function speak(text: string, now: number, about: { topic: Topic; source: string } | null = null) {
-    if (!head) return;
+    if (!head || bossed) return;
     speakingUntil = now + chatter.shownFor(text);
     voteFor = about && { topic: about.topic, source: about.source };
     invoke('say', { text, ...head, vote: !!about }).catch(console.error);
@@ -1120,7 +1172,8 @@
     // жирок по сегодняшней дате: если комп не выключали с октября, кошка всё равно потолстеет
     if (anim) {
       const { frames } = ANIMS[fatOn(new Date())][anim];
-      const drawn = frames[tick % frames.length];
+      // наряд по календарю: шапка, тыква — на любую позу с головой анфас
+      const drawn = dress(frames[tick % frames.length], holidays.outfit(new Date()));
       // все позы нарисованы мордой вправо; «з-з-з» — буквы, их не зеркалят
       frame = pet?.facing === -1 && anim !== 'zzz' ? flip(drawn) : drawn;
       draw(canvas.getContext('2d')!, frame);
@@ -1220,6 +1273,9 @@
     yarnOn = s.yarn;
     mode = s.mode;
     topics = s.topics;
+    // трей и его подсказка тоже зовут питомца по имени
+    if (s.name !== petName) invoke('name_pet', { name: s.name }).catch(console.error);
+    petName = s.name;
     reviewsOn = s.reviews;
     // ленты новых тем качаются сразу, а не когда кошка соберётся рассказать
     invoke('news_topics', { topics: [...topics] }).catch(console.error);
@@ -1246,7 +1302,13 @@
   /** ПКМ по кошке — своё меню (menu.rs): фокус у человека не забирает, выбор приходит событием menu-pick. */
   function showMenu() {
     const s = parse(store.get('settings'));
+    const known = tally.days(stats.since, Date.now());
     const items = [
+      // шапка с именем: назвали — ведёт в статистику, нет — в настройки, где имя и дают
+      s.name
+        ? { id: 'about', text: s.name, hint: `знакомы ${known} ${tally.plural(known, ['день', 'дня', 'дней'])}` }
+        : { id: 'about', text: 'Без имени', hint: 'назвать — в настройках' },
+      { separator: true },
       { id: 'feeder', text: 'Кормушка', checked: s.feeder, hint: s.feeder ? 'клик по миске — про запас' : 'клик по миске — покормить сейчас' },
       { id: 'bed', text: 'Лежак', checked: s.bed, hint: 'тащи мышью, как и миску' },
       { id: 'hideFromCapture', text: 'Прятать от записи экрана', checked: s.hideFromCapture },
@@ -1267,6 +1329,19 @@
     else if (id === 'laser') invoke('set_laser', { on: dot === null }).catch(console.error);
     else if (id === 'settings') invoke('open_settings').catch(console.error);
     else if (id === 'stats') invoke('open_stats').catch(console.error);
+    else if (id === 'about') invoke(petName ? 'open_stats' : 'open_settings').catch(console.error);
+  }
+
+  /** Разблокировали экран: спала, пока человека не было, — просыпается без обид и радуется. */
+  function unlocked(now: number) {
+    const long = now - lockedAt >= LOCK_JOY_MS;
+    lockedAt = 0;
+    graceUntil = now + UNLOCK_GRACE_MS;
+    if (carried || sleepy.mood(nap) !== 'asleep') return;
+    nap = sleepy.stir(nap);
+    sleepPose = null;
+    if (long) pettedUntil = now + JOY_MS;
+    persist(now);
   }
 
   async function sense() {
@@ -1276,8 +1351,11 @@
       senses = await invoke<Senses>('senses');
       seenHuman ||= !senses.idle;
       watch(Date.now(), senses);
-      // за фильмом человек не трогает мышь — это не «отошёл»
-      humanIdle = seenHuman && senses.idle && !film.active;
+      const locked = senses.quiet === 'away';
+      if (locked && !lockedAt) lockedAt = Date.now();
+      if (!locked && lockedAt) unlocked(Date.now());
+      // заблокировал экран — точно отошёл, кошка засыпает сразу; за фильмом человек не трогает мышь — это не «отошёл»
+      humanIdle = locked || (seenHuman && senses.idle && !film.active && Date.now() >= graceUntil);
       const hid = calls.onCall(hide);
       hide = calls.step(hide, senses.call ?? false, Date.now());
       if (calls.onCall(hide) && !hid) stats.calls++;
@@ -1288,7 +1366,19 @@
     } catch (e) {
       console.error(e);
     }
+    party(Date.now());
     chat(Date.now());
+  }
+
+  /** Тортик или годовщина: ждёт, пока кошка свободна, облачко пусто и человеку можно мешать. */
+  function party(now: number) {
+    if (bossed || speakingUntil || !free() || !unbothered()) return;
+    const due = holidays.celebrate(stats, now);
+    if (!due) return;
+    [stats] = due;
+    cakeUntil = now + CAKE_MS;
+    speak(due[1], now);
+    persist(now);
   }
 
   onMount(() => {
@@ -1428,6 +1518,18 @@
       dot = null;
     });
     // облачко смахнули кликом: окно уже спряталось само, кошка запоминает и болтает реже
+    const unboss = win.listen<boolean>('boss', (e) => {
+      bossed = e.payload;
+      if (bossed && speakingUntil) hush();
+    });
+    // снимают экран: свободная кошка позирует; занятая своим делом не отвлекается
+    const unshot = win.listen('shot', () => {
+      if (!bossed && free()) poseUntil = Date.now() + POSE_MS;
+    });
+    // очистили корзину: свободная кошка хрумкает выброшенным
+    const uncrunch = win.listen('crunch', () => {
+      if (!bossed && free()) crunchUntil = Date.now() + CRUNCH_MS;
+    });
     const unshoo = win.listen('bubble-shoo', () => {
       speakingUntil = 0;
       voteFor = null;
@@ -1457,7 +1559,7 @@
       clearInterval(moving);
       clearInterval(id);
       const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn, unnews, unrevenge];
-      for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, unstats, undrag, unlaser, unlaserOff, unshoo, unvote]) off.then((f) => f());
+      for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, unstats, undrag, unlaser, unlaserOff, unshoo, unvote, unboss, unshot, uncrunch]) off.then((f) => f());
     };
   });
 </script>

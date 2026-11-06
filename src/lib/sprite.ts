@@ -37,6 +37,11 @@ export const PALETTE: Record<string, string> = {
   A: 'rgba(176, 142, 38, 0.85)', // лужа: край
   W: 'rgba(255, 250, 214, 0.85)', // лужа: блик
   e: 'rgba(232, 206, 84, 0.35)', // лужа высыхает
+  H: '#d23a3a', // новогодняя шапка
+  I: '#f4f1ea', // мех на шапке
+  o: '#f08c2a', // тыква
+  O: '#b9561a', // тыква: дольки
+  g: '#5c8a3a', // хвостик тыквы
 };
 
 /** Миска и корм в ней: клик сюда кормит, а не гладит. */
@@ -219,6 +224,11 @@ const BED_FRONT: Part = BED.slice(4);
 
 const HEART: Part = ['.hh.hh.', 'hhhhhhh', 'hhhhhhh', '.hhhhh.', '..hhh..', '...h...'];
 const Z_SMALL: Part = ['zzzz', '..z.', '.z..', 'zzzz'];
+
+// Тортик на тарелке, 7×8: свечка, вишенка, крем, корж.
+const CAKE: Part = ['...s...', '...k...', '.kkkkk.', '.klhlk.', '.kcccck', '.kcCck.', 'kwwwwwk', '.kkkkk.'];
+// Лапа, вытянутая вбок к тарелке.
+const PAW_SIDE: Part = ['.kkk', 'klfk', '.kkk'];
 const Z_BIG: Part = ['zzzzz', '...z.', '..z..', '.z...', 'zzzzz'];
 
 /** Штампует детали по порядку: следующая рисуется поверх предыдущей. */
@@ -765,6 +775,36 @@ function build(fat: Fat) {
         sitting(fat, EYES_HAPPY, SIT_TAIL, [[TONGUE, 15, 21]]),
       ],
     },
+    // снимают экран (PrintScreen, Win+Shift+S): сидит ровно, жмурится, «сы-ыр»; сбоку мигает вспышка
+    pose: {
+      ms: 500,
+      frames: [
+        sitting(fat, EYES_HAPPY, SIT_TAIL, [[HEAD_MEOW, 10, 19]]),
+        sitting(fat, EYES_HAPPY, SIT_TAIL, [[HEAD_MEOW, 10, 19], [STAR, 3, 4], [STAR, 26, 6]]),
+        sitting(fat, EYES_HAPPY, SIT_TAIL, [[HEAD_MEOW, 10, 19]]),
+        sitting(fat, EYES_HAPPY, SIT_TAIL, [[HEAD_MEOW, 10, 19]]),
+      ],
+    },
+    // очистили корзину: хрумкает выброшенное, крошки сыплются с подбородка
+    crunch: {
+      ms: 220,
+      frames: [
+        sitting(fat, EYES_SHUT, SIT_TAIL, [[HEAD_MEOW, 10, 19], [['c'], 14, 23]]),
+        sitting(fat, EYES_SHUT, SIT_TAIL, [[['C'], 17, 24]]),
+        sitting(fat, EYES_SHUT, SIT_TAIL, [[HEAD_MEOW, 10, 19], [['c'], 18, 23]]),
+        sitting(fat, EYES_HAPPY, SIT_TAIL, [[['c'], 14, 25]]),
+      ],
+    },
+    // праздник: сидит у тортика и, как положено кошке, спихивает тарелку лапой
+    cake: {
+      ms: 450,
+      frames: [
+        sitting(fat, EYES_OPEN, SIT_TAIL, [[CAKE, 1, 24]]),
+        sitting(fat, EYES_OPEN, SIT_TAIL, [[CAKE, 1, 24], [PAW_SIDE, 8, 28]]),
+        sitting(fat, EYES_SHUT, SIT_TAIL, [[CAKE, 0, 24], [PAW_SIDE, 7, 28]]),
+        sitting(fat, EYES_HAPPY, SIT_TAIL, [[CAKE, 0, 24]]),
+      ],
+    },
     zzz: {
       ms: 1100,
       frames: [
@@ -791,6 +831,35 @@ export const ANIMS: Record<Fat, Anims> = { 0: build(0), 1: build(1), 2: build(2)
  */
 export function ground(anim: AnimName): number {
   return anim === 'sleep' ? 27 : SIZE - 1;
+}
+
+/** Наряд по случаю: шапка на Новый год, тыква на Хэллоуин. */
+export type Outfit = 'hat' | 'pumpkin';
+
+// Наряды ставятся над рядом макушки (уши + темя) головы анфас, по её левому краю; 12 в ширину.
+const CROWN_ROW = 'kppkkkkkkppk';
+const OUTFITS: Record<Outfit, Part> = {
+  hat: ['........kk..', '.......kIIk.', '......kHkk..', '.....kHHk...', '....kHHHHk..', '..kIIIIIIk..'],
+  pumpkin: ['.....gk.....', '...kkgkkk...', '..koOoOook..', '..kOoOoOok..', '..kkkkkkkk..'],
+};
+
+/**
+ * Надеть наряд. Работает в любой позе, где голова анфас: ищем ряд макушки. Позы с головой
+ * боком или без головы остаются как есть. Вход не трогает.
+ */
+export function dress(frame: Frame, outfit: Outfit | null): Frame {
+  if (!outfit) return frame;
+  const y = frame.findIndex((row) => row.includes(CROWN_ROW));
+  if (y < 0) return frame;
+  const x = frame[y].indexOf(CROWN_ROW);
+  const part = OUTFITS[outfit];
+  const g = frame.map((r) => [...r]);
+  part.forEach((row, dy) => {
+    const ty = y - part.length + dy;
+    for (let dx = 0; dx < row.length; dx++)
+      if (row[dx] !== '.' && ty >= 0 && ty < SIZE && x + dx < SIZE) g[ty][x + dx] = row[dx];
+  });
+  return g.map((r) => r.join(''));
 }
 
 export function flip(frame: Frame): Frame {

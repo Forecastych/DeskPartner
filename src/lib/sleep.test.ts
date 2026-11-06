@@ -62,6 +62,19 @@ describe('step: время', () => {
     expect(step(sleeping(), 30 * DAY, true)[0].slept).toBe(MAX_STEP_MS);
   });
 
+  it('усталость копится быстрее в `tired` раз, а сон и обиды идут обычным ходом', () => {
+    expect(step(fresh(), MIN, false, 1.5)[0].awake).toBe(1.5 * MIN);
+    expect(step(sleeping(), MIN, false, 1.5)[0].slept).toBe(MIN);
+    expect(step({ ...fresh(), wakes: 1, cranky: GROGGY_MS }, 10_000, false, 2)[0].cranky).toBe(GROGGY_MS - 10_000);
+    const [s, e] = step({ ...fresh(), awake: AWAKE_MS - MIN }, MIN / 2, false, 2);
+    expect(e).toBe('sleep');
+    expect(s.asleep).toBe(true);
+  });
+
+  it('битый `tired` считается единицей', () => {
+    for (const t of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) expect(step(fresh(), MIN, false, t)[0].awake).toBe(MIN);
+  });
+
   it('NaN вместо разницы ничего не портит', () => {
     const [s, e] = step(sleeping(MIN), Number.NaN, false);
     expect(s.slept).toBe(MIN);

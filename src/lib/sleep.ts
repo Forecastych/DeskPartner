@@ -53,9 +53,13 @@ export function mood(s: Sleep): Mood {
 /** Полный сон: проснулась выспавшейся, обиды забыты. */
 const rested = (s: Sleep): Sleep => ({ ...s, asleep: false, slept: 0, awake: 0, wakes: 0, cranky: 0 });
 
-/** Один кадр жизни. Чистая функция: возвращает новый объект и событие, вход не трогает. */
-export function step(s: Sleep, ms: number, humanIdle: boolean): [Sleep, SleepEvent | null] {
+/**
+ * Один кадр жизни. Чистая функция: возвращает новый объект и событие, вход не трогает.
+ * `tired` — во сколько раз быстрее копится усталость: от батареи, в «не свои» часы.
+ */
+export function step(s: Sleep, ms: number, humanIdle: boolean, tired = 1): [Sleep, SleepEvent | null] {
   const dt = Math.min(Math.max(ms, 0), MAX_STEP_MS) || 0;
+  const wear = dt * (Number.isFinite(tired) && tired > 0 ? tired : 1);
 
   // Спит за краем: вытащить нельзя, возвращается сама выспавшейся.
   if (s.away > 0) {
@@ -67,7 +71,7 @@ export function step(s: Sleep, ms: number, humanIdle: boolean): [Sleep, SleepEve
   // Разбуженная: походит вялой или злой и уснёт на ходу; сон продолжается, slept не сбрасывается.
   if (s.cranky > 0) {
     const cranky = s.cranky - dt;
-    const awake = s.awake + dt;
+    const awake = s.awake + wear;
     if (cranky > 0) return [{ ...s, cranky, awake }, null];
     return [{ ...s, cranky: 0, awake, asleep: true }, 'doze'];
   }
@@ -80,7 +84,7 @@ export function step(s: Sleep, ms: number, humanIdle: boolean): [Sleep, SleepEve
   }
 
   // Бодрая: устала или скучно без человека — засыпает.
-  const n: Sleep = { ...s, awake: s.awake + dt };
+  const n: Sleep = { ...s, awake: s.awake + wear };
   if (n.awake >= AWAKE_MS || humanIdle) return [{ ...n, asleep: true, slept: 0 }, 'sleep'];
   return [n, null];
 }

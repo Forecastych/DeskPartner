@@ -599,7 +599,7 @@ mod sys {
             let slow_tick = at.duration_since(slow) >= SLOW;
             if slow_tick {
                 slow = at;
-                quiet = win::quiet() != Quiet::No;
+                quiet = win::quiet() != Quiet::No || win::bossed();
             }
 
             let ctrl = down(VK_CONTROL);
@@ -623,7 +623,7 @@ mod sys {
             let mut want = held || STICKY.load(Ordering::Relaxed);
             // зажечься можно и между медленными тиками — тогда «не мешать» спросим прямо сейчас
             if want && !on && !slow_tick {
-                quiet = win::quiet() != Quiet::No;
+                quiet = win::quiet() != Quiet::No || win::bossed();
             }
             if quiet {
                 STICKY.store(false, Ordering::Relaxed);
