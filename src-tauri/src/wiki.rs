@@ -1,18 +1,18 @@
-//! «В этот день» из русской Википедии — свежие факты к встроенному запасу.
+//! «В этот день» из Википедии на языке интерфейса — свежие факты к встроенному запасу.
 //!
 //! Запрос идёт отсюда, а не из окна: CSP окна наружу не пускает, и так проще проследить, что
 //! уходит в сеть, — только месяц, день и язык в адресе и название программы в User-Agent
 //! (его требуют правила Викимедии). Раз в день: ответ лежит в папке данных (`wiki.json`) и
-//! до завтра читается оттуда. По темам события раскладывает фронтенд (src/lib/wiki.ts).
+//! до завтра читается оттуда; сменили язык — скачается заново. По темам события раскладывает фронтенд (src/lib/wiki.ts).
 //! Нет сети или ответ странный — ошибка уходит фронтенду, а кошка молча обходится своим запасом.
 
+use crate::i18n::{self, tr};
 use crate::store;
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const LANG: &str = "ru";
 const USER_AGENT: &str = concat!("DeskPartner/", env!("CARGO_PKG_VERSION"));
 /// Не отвечает столько — считаем, что сети нет; облачко подождёт до следующей попытки.
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -30,6 +30,9 @@ pub struct Event {
 #[derive(Serialize, Deserialize)]
 struct Cache {
     day: String,
+    /// Язык раздела; в старых файлах его нет — такой кэш просто скачается заново.
+    #[serde(default)]
+    lang: String,
     events: Vec<Event>,
 }
 
@@ -53,13 +56,14 @@ struct RawPage {
     description: Option<String>,
 }
 
-fn url(month: u32, day: u32) -> String {
-    format!("https://{LANG}.wikipedia.org/api/rest_v1/feed/onthisday/events/{month:02}/{day:02}")
+fn url(lang: &str, month: u32, day: u32) -> String {
+    format!("https://{lang}.wikipedia.org/api/rest_v1/feed/onthisday/events/{month:02}/{day:02}")
 }
 
 /// Из ответа — только нужное: без года или текста событие не рассказать.
 fn parse(json: &str) -> Result<Vec<Event>, String> {
-    let feed: Feed = serde_json::from_str(json).map_err(|e| format!("Википедия ответила непонятно: {e}"))?;
+    let feed: Feed = serde_json::from_str(json)
+        .map_err(|e| format!("{}: {e}", tr("Википедия ответила непонятно", "Wikipedia sent an odd answer")))?;
     Ok(feed
         .events
         .into_iter()
@@ -71,29 +75,30 @@ fn parse(json: &str) -> Result<Vec<Event>, String> {
         .collect())
 }
 
-/// Кэш, если он за этот день.
-fn cached(dir: Option<&Path>, day: &str) -> Option<Vec<Event>> {
+/// Кэш, если он за этот день и на этом языке.
+fn cached(dir: Option<&Path>, day: &str, lang: &str) -> Option<Vec<Event>> {
     let cache: Cache = serde_json::from_str(&store::load(dir, CACHE).ok()??).ok()?;
-    (cache.day == day).then_some(cache.events)
+    (cache.day == day && cache.lang == lang).then_some(cache.events)
 }
 
-fn fetch(month: u32, day: u32) -> Result<Vec<Event>, String> {
+fn fetch(lang: &str, month: u32, day: u32) -> Result<Vec<Event>, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(TIMEOUT)).user_agent(USER_AGENT).build().into();
-    let net = |e: ureq::Error| format!("Википедия недоступна: {e}");
-    let body = agent.get(&url(month, day)).call().map_err(net)?.body_mut().read_to_string().map_err(net)?;
+    let net = |e: ureq::Error| format!("{}: {e}", tr("Википедия недоступна", "Wikipedia is unreachable"));
+    let body = agent.get(&url(lang, month, day)).call().map_err(net)?.body_mut().read_to_string().map_err(net)?;
     parse(&body)
 }
 
 fn today() -> Result<Vec<Event>, String> {
     let now = chrono::Local::now();
     let day = now.format("%Y-%m-%d").to_string();
+    let lang = i18n::code();
     let dir = store::data_dir().map(PathBuf::from);
-    if let Some(events) = cached(dir.as_deref(), &day) {
+    if let Some(events) = cached(dir.as_deref(), &day, lang) {
         return Ok(events);
     }
-    let events = fetch(now.month(), now.day())?;
+    let events = fetch(lang, now.month(), now.day())?;
     // кэш не записался — не беда: в худшем случае ещё раз спросим сегодня же
-    if let Ok(json) = serde_json::to_string(&Cache { day, events: events.clone() }) {
+    if let Ok(json) = serde_json::to_string(&Cache { day, lang: lang.into(), events: events.clone() }) {
         let _ = store::save(dir.as_deref(), CACHE, &json);
     }
     Ok(events)
@@ -111,8 +116,8 @@ mod tests {
 
     #[test]
     fn url_has_only_date_and_language() {
-        assert_eq!(url(4, 12), "https://ru.wikipedia.org/api/rest_v1/feed/onthisday/events/04/12");
-        assert_eq!(url(11, 5), "https://ru.wikipedia.org/api/rest_v1/feed/onthisday/events/11/05");
+        assert_eq!(url("ru", 4, 12), "https://ru.wikipedia.org/api/rest_v1/feed/onthisday/events/04/12");
+        assert_eq!(url("en", 11, 5), "https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/11/05");
     }
 
     #[test]
@@ -145,11 +150,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("deskpartner-wiki-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let events = vec![Event { year: 1957, text: "Спутник".into(), about: vec![] }];
-        let json = serde_json::to_string(&Cache { day: "2026-10-04".into(), events: events.clone() }).unwrap();
+        let json = serde_json::to_string(&Cache { day: "2026-10-04".into(), lang: "ru".into(), events: events.clone() }).unwrap();
         store::save(Some(&dir), CACHE, &json).unwrap();
-        assert_eq!(cached(Some(&dir), "2026-10-04"), Some(events));
-        assert_eq!(cached(Some(&dir), "2026-10-05"), None);
-        assert_eq!(cached(None, "2026-10-04"), None);
+        assert_eq!(cached(Some(&dir), "2026-10-04", "ru"), Some(events));
+        assert_eq!(cached(Some(&dir), "2026-10-04", "en"), None, "сменили язык — качаем заново");
+        assert_eq!(cached(Some(&dir), "2026-10-05", "ru"), None);
+        assert_eq!(cached(None, "2026-10-04", "ru"), None);
+        store::save(Some(&dir), CACHE, r#"{"day":"2026-10-04","events":[]}"#).unwrap();
+        assert_eq!(cached(Some(&dir), "2026-10-04", "ru"), None, "старый файл без языка");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

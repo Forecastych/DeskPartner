@@ -4,12 +4,13 @@
   import { invoke } from '@tauri-apps/api/core';
   import { open } from '@tauri-apps/plugin-dialog';
   import { onMount, tick } from 'svelte';
+  import { t } from './lib/i18n';
   import { defaults, serialize, suggestName } from './lib/settings';
   import { dirHint, errorText, isDriveRoot, pickDir } from './lib/setup';
   import SettingsFields from './SettingsFields.svelte';
   import { Button, Dialog, Group, Hint, Radio, TextInput } from './ui';
 
-  const TITLES = ['Где хранить данные', 'Питомец и темы', 'Главные галочки'];
+  const TITLES = [t('Где хранить данные', 'Where to keep data'), t('Питомец и темы', 'Pet and topics'), t('Главные галочки', 'Main switches')];
 
   let step = $state(0);
   // имя сразу предложено: стереть проще, чем придумать с нуля
@@ -40,7 +41,7 @@
       if (!dir) dir = current ?? suggested[0] ?? '';
     } catch (e) {
       // Без подсказок человек всё равно может вписать или выбрать папку сам
-      error = `Не удалось подобрать папку: ${errorText(e)}`;
+      error = `${t('Не удалось подобрать папку', "Couldn't suggest a folder")}: ${errorText(e)}`;
     }
   });
 
@@ -59,10 +60,10 @@
   async function browse() {
     error = '';
     try {
-      const picked = await open({ directory: true, title: 'Папка для данных питомца', defaultPath: dir || undefined });
+      const picked = await open({ directory: true, title: t('Папка для данных питомца', 'Folder for pet data'), defaultPath: dir || undefined });
       if (typeof picked === 'string') take(picked);
     } catch (e) {
-      error = `Не удалось открыть выбор папки: ${errorText(e)}`;
+      error = `${t('Не удалось открыть выбор папки', "Couldn't open the folder picker")}: ${errorText(e)}`;
     }
   }
 
@@ -79,7 +80,7 @@
     if (step === 0) {
       const path = dir.trim();
       if (!path) {
-        error = 'Выбери папку для данных.';
+        error = t('Выбери папку для данных.', 'Pick a folder for the data.');
         return;
       }
       // Вписали корень руками и сразу нажали «Далее» — сначала показать подпапку, а не молча её создать
@@ -142,12 +143,14 @@
   }
 </script>
 
-<Dialog title="DeskPartner · первый запуск" {onsubmit} {busy}>
+<Dialog title={t('DeskPartner · первый запуск', 'DeskPartner · first launch')} {onsubmit} {busy}>
   {#snippet header()}
-    <ol class="steps" aria-label="Шаги настройки">
-      {#each TITLES as t, i}
+    <ol class="steps" aria-label={t('Шаги настройки', 'Setup steps')}>
+      {#each TITLES as title, i}
         <li class:done={i < step} class:now={i === step} aria-current={i === step ? 'step' : undefined}>
-          <span class="ui-sr">Шаг {i + 1} из {TITLES.length}: {t}{i < step ? ' (готово)' : ''}</span>
+          <span class="ui-sr"
+            >{t(`Шаг ${i + 1} из ${TITLES.length}`, `Step ${i + 1} of ${TITLES.length}`)}: {title}{i < step ? t(' (готово)', ' (done)') : ''}</span
+          >
         </li>
       {/each}
     </ol>
@@ -156,12 +159,14 @@
 
   {#if step === 0}
     <p>
-      Выбери папку: туда лягут питомец, дневник, файл интересов и кэш фактов. Системный диск
-      лучше не загромождать, поэтому сначала предлагаем другой диск.
+      {t(
+        'Выбери папку: туда лягут питомец, дневник, файл интересов и кэш фактов. Системный диск лучше не загромождать, поэтому сначала предлагаем другой диск.',
+        "Pick a folder for the pet, its diary, your interests file and the facts cache. It's better not to clutter the system drive, so another drive comes first.",
+      )}
     </p>
 
     {#if suggested.length}
-      <Group legend="Предлагаем">
+      <Group legend={t('Предлагаем', 'Suggested')}>
         {#each suggested as s, i}
           <Radio
             name="dir"
@@ -169,7 +174,7 @@
             bind:group={dir}
             onchange={() => take(s)}
             disabled={busy}
-            hint="{dirHint(i, suggested.length, s)}{i === 0 ? ' — лучший вариант' : ''}"
+            hint="{dirHint(i, suggested.length, s)}{i === 0 ? t(' — лучший вариант', ' (best choice)') : ''}"
           >
             <span class="ui-mono">{s}</span>
           </Radio>
@@ -179,34 +184,44 @@
 
     <TextInput
       id="dir"
-      label="Папка"
+      label={t('Папка', 'Folder')}
       bind:el={dirInput}
       bind:value={dir}
       onchange={() => take(dir)}
       mono
       spellcheck="false"
       autocomplete="off"
-      placeholder="Например, D:\DeskPartner"
+      placeholder={t('Например, D:\\DeskPartner', 'For example, D:\\DeskPartner')}
       disabled={busy}
     >
-      <Button onclick={browse} disabled={busy}>Обзор…</Button>
+      <Button onclick={browse} disabled={busy}>{t('Обзор…', 'Browse…')}</Button>
     </TextInput>
 
     {#if rootPicked}
       <Hint tone="note" role="status">
-        <span>Это корень диска {rootPicked} — сложим всё в отдельную папку <span class="ui-mono">{dir}</span>.</span>
-        <Button variant="link" onclick={useRoot}>Нет, прямо в корень</Button>
+        <span
+          >{t(`Это корень диска ${rootPicked} — сложим всё в отдельную папку`, `${rootPicked} is a drive root, so everything goes into its own folder`)}
+          <span class="ui-mono">{dir}</span>.</span
+        >
+        <Button variant="link" onclick={useRoot}>{t('Нет, прямо в корень', 'No, right in the root')}</Button>
       </Hint>
     {/if}
 
     <Hint>
-      Передумаешь — папку можно сменить в настройках, данные переедут сами. В профиле Windows
-      (AppData) хранится только путь к этой папке.
+      {t(
+        'Передумаешь — папку можно сменить в настройках, данные переедут сами. В профиле Windows (AppData) хранится только путь к этой папке.',
+        'Changed your mind? You can switch folders in settings and the data moves on its own. Your Windows profile (AppData) only keeps the path to this folder.',
+      )}
     </Hint>
   {:else if step === 1}
     <SettingsFields bind:settings part="pet" disabled={busy} wizard />
   {:else}
-    <Hint>Почти всё выключено — это осторожная версия. Включай только то, что нужно; потом можно поменять.</Hint>
+    <Hint>
+      {t(
+        'Почти всё выключено — это осторожная версия. Включай только то, что нужно; потом можно поменять.',
+        "Almost everything is off: this is the careful version. Turn on only what you need; you can change it later.",
+      )}
+    </Hint>
 
     <SettingsFields bind:settings part="toggles" disabled={busy} wizard />
   {/if}
@@ -217,17 +232,17 @@
 
   {#snippet footer()}
     {#if step > 0}
-      <Button onclick={() => go(step - 1)} disabled={busy}>Назад</Button>
+      <Button onclick={() => go(step - 1)} disabled={busy}>{t('Назад', 'Back')}</Button>
     {/if}
     <span class="grow"></span>
     {#if step === 2}
-      <Button onclick={() => finish(true)} disabled={busy}>Пропустить</Button>
+      <Button onclick={() => finish(true)} disabled={busy}>{t('Пропустить', 'Skip')}</Button>
     {/if}
     <Button type="submit" variant="primary" bind:el={submit} disabled={busy}>
       {#if busy}
-        {step === 0 ? 'Проверяем папку…' : 'Выпускаем питомца…'}
+        {step === 0 ? t('Проверяем папку…', 'Checking the folder…') : t('Выпускаем питомца…', 'Letting the pet out…')}
       {:else}
-        {step === 2 ? 'Готово' : 'Далее'}
+        {step === 2 ? t('Готово', 'Done') : t('Далее', 'Next')}
       {/if}
     </Button>
   {/snippet}

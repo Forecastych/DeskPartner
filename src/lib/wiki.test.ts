@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { setLang } from './i18n';
 import { TOPICS } from './settings';
 import { line, MAX_TEXT, PER_TOPIC, SIGN, sort, topicsOf, type WikiEvent } from './wiki';
 
@@ -24,8 +25,25 @@ describe('wiki: «В этот день»', () => {
   });
 
   it('в облачке — год, текст и подпись лицензии', () => {
-    expect(line(ev([], 'Первый полёт человека в космос.'))).toBe(`В этот день в 1961 году: Первый полёт человека в космос. (${SIGN})`);
-    expect(SIGN).toBe('Википедия, CC BY-SA');
+    expect(line(ev([], 'Первый полёт человека в космос.'))).toBe(`В этот день в 1961 году: Первый полёт человека в космос. (${SIGN.ru})`);
+    expect(SIGN.ru).toBe('Википедия, CC BY-SA');
+  });
+
+  it('по-английски — английские правила и подпись', () => {
+    setLang('en');
+    try {
+      expect(topicsOf(ev(['Soviet cosmonaut', 'Soviet spacecraft']))).toEqual(['космос']);
+      expect(topicsOf(ev(['English association football club']))).toEqual(['футбол']);
+      expect(topicsOf(ev(['American actor and film director']))).toEqual(['кино']);
+      expect(topicsOf(ev(['Russian writer', 'Emperor of Russia']))).toEqual(['книги', 'история']);
+      expect(topicsOf(ev(['Capital and largest city of Poland, Warsaw']))).toEqual([]);
+      expect(topicsOf(ev(['Battle of Hastings', 'Second World War']))).toEqual(['история']);
+      expect(topicsOf(ev(['Japanese manga series']))).toEqual(['аниме']);
+      for (const topic of TOPICS) expect(() => topicsOf(ev([topic]))).not.toThrow();
+      expect(line(ev([], 'First human spaceflight.'))).toBe('On this day in 1961: First human spaceflight. (Wikipedia, CC BY-SA)');
+    } finally {
+      setLang('ru');
+    }
   });
 
   it('раскладка: до н. э., без текста и длинное — мимо', () => {

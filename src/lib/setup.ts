@@ -1,5 +1,7 @@
 // Мелочи окон первого запуска и настроек, вынесенные из компонентов, чтобы их можно было проверить тестами.
 
+import { t } from './i18n';
+
 /** Имя папки, которую предлагаем создать, если человек выбрал корень диска. */
 export const APP_FOLDER = 'DeskPartner';
 
@@ -31,9 +33,9 @@ export function pickDir(path: string, keepRoot: string | null): { dir: string; r
 
 /** Подпись к предложенной папке. Последняя у Rust — всегда папка пользователя на системном диске. */
 export function dirHint(i: number, count: number, path: string): string {
-  if (i === count - 1) return 'в папке пользователя, на системном диске';
+  if (i === count - 1) return t('в папке пользователя, на системном диске', 'in your user folder, on the system drive');
   const d = driveOf(path);
-  return d ? `отдельный диск ${d}` : 'отдельный диск';
+  return d ? t(`отдельный диск ${d}`, `separate drive ${d}`) : t('отдельный диск', 'separate drive');
 }
 
 /**
@@ -46,11 +48,11 @@ export function samePath(a: string, b: string): boolean {
 }
 
 /**
- * Текст ошибки для человека. Rust отдаёт строку по-русски; всё прочее (нет Tauri, упал плагин)
+ * Текст ошибки для человека. Rust отдаёт строку на языке интерфейса; всё прочее (нет Tauri, упал плагин)
  * сводим к сообщению, а не к «[object Object]».
  */
 export function errorText(e: unknown): string {
   if (typeof e === 'string' && e.trim()) return e;
   if (e instanceof Error && e.message) return e.message;
-  return 'Что-то пошло не так. Попробуй ещё раз.';
+  return t('Что-то пошло не так. Попробуй ещё раз.', 'Something went wrong. Please try again.');
 }

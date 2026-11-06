@@ -2,20 +2,30 @@
 // дате знакомства (stats.since). Что уже отмечено, лежит в stats (cakes, years): каждый праздник
 // раз в жизни. Наряд — по календарю: шапка на Новый год, тыква на Хэллоуин.
 
+import { pick, plural, t, type Lang } from './i18n';
 import type { Outfit } from './sprite';
-import { plural, type Stats } from './stats';
+import type { Stats } from './stats';
 
 const HOUR = 3_600_000;
 
 /** Тортики за столько часов вместе. */
 export const CAKES = [24, 168, 360, 720, 2400] as const;
 
-const CAKE_LINES: Record<(typeof CAKES)[number], string> = {
-  24: 'Сутки рядом на экране! Где мой тортик?',
-  168: 'Неделя вместе! Это надо отметить',
-  360: 'Пятнадцать дней вместе! Тортик, пожалуйста',
-  720: 'Месяц вместе! Праздничный тортик',
-  2400: 'Сто дней вместе! Самый большой тортик',
+const CAKE_LINES: Record<Lang, Record<(typeof CAKES)[number], string>> = {
+  ru: {
+    24: 'Сутки рядом на экране! Где мой тортик?',
+    168: 'Неделя вместе! Это надо отметить',
+    360: 'Пятнадцать дней вместе! Тортик, пожалуйста',
+    720: 'Месяц вместе! Праздничный тортик',
+    2400: 'Сто дней вместе! Самый большой тортик',
+  },
+  en: {
+    24: 'A whole day on screen together! Where is my cake?',
+    168: 'A week together! We have to celebrate',
+    360: 'Fifteen days together! Cake, please',
+    720: 'A month together! Party cake time',
+    2400: 'A hundred days together! The biggest cake ever',
+  },
 };
 
 /** Сколько вех по времени вместе уже пройдено. */
@@ -40,11 +50,14 @@ export function years(since: number, now: number): number {
 export function celebrate(s: Stats, now: number): [Stats, string] | null {
   const y = years(s.since, now);
   if (y > s.years) {
-    const text = y === 1 ? 'Год, как мы знакомы! С годовщиной' : `${y} ${plural(y, ['год', 'года', 'лет'])}, как мы знакомы!`;
+    const text =
+      y === 1
+        ? t('Год, как мы знакомы! С годовщиной', "It's been a year since we met! Happy anniversary")
+        : t(`${y} ${plural(y, ['год', 'года', 'лет'])}, как мы знакомы!`, `${y} years since we met!`);
     return [{ ...s, years: y }, text];
   }
   const c = cakesReached(s.together);
-  if (c > s.cakes) return [{ ...s, cakes: c }, CAKE_LINES[CAKES[c - 1]]];
+  if (c > s.cakes) return [{ ...s, cakes: c }, pick(CAKE_LINES)[CAKES[c - 1]]];
   return null;
 }
 

@@ -2,6 +2,8 @@
 // По умолчанию — осторожная версия: всё, что лезет в игры, браузер или сеть, выключено.
 // Исключение — «прятать от записи экрана»: питомец в чужом скриншоте выдаёт больше, чем хотелось бы.
 
+import { LANG_PREFS, pick, type Lang, type LangPref } from './i18n';
+
 export const TOPICS = [
   'футбол',
   'хоккей',
@@ -30,6 +32,41 @@ export const TOPICS = [
 ] as const;
 export type Topic = (typeof TOPICS)[number];
 
+/**
+ * Тема — ключ во всех таблицах (факты, правила Википедии, ленты в Rust) и в файле настроек,
+ * поэтому остаётся русской. Человеку показываем название на его языке.
+ */
+const TOPIC_EN: Record<Topic, string> = {
+  футбол: 'football',
+  хоккей: 'hockey',
+  баскетбол: 'basketball',
+  теннис: 'tennis',
+  'формула 1': 'formula 1',
+  единоборства: 'combat sports',
+  киберспорт: 'esports',
+  игры: 'games',
+  аниме: 'anime',
+  кино: 'movies',
+  сериалы: 'tv series',
+  музыка: 'music',
+  книги: 'books',
+  космос: 'space',
+  наука: 'science',
+  техника: 'tech',
+  программирование: 'programming',
+  история: 'history',
+  животные: 'animals',
+  природа: 'nature',
+  путешествия: 'travel',
+  еда: 'food',
+  искусство: 'art',
+  авто: 'cars',
+};
+
+export function topicName(t: Topic): string {
+  return pick({ ru: t, en: TOPIC_EN[t] });
+}
+
 export const MODES = ['calm', 'pranks'] as const;
 export type Mode = (typeof MODES)[number];
 
@@ -44,11 +81,14 @@ export type HunterArea = (typeof HUNTER_AREAS)[number];
 export const NAME_MAX = 20;
 
 /** Подсказки на первом запуске: кошка в репликах — «она», имена ей под стать. */
-export const NAMES = ['Мурка', 'Соня', 'Луна', 'Тучка', 'Ириска', 'Пуша', 'Сима', 'Бусинка', 'Дуся', 'Плюшка', 'Фиса', 'Вишня'] as const;
+export const NAMES: Record<Lang, readonly string[]> = {
+  ru: ['Мурка', 'Соня', 'Луна', 'Тучка', 'Ириска', 'Пуша', 'Сима', 'Бусинка', 'Дуся', 'Плюшка', 'Фиса', 'Вишня'],
+  en: ['Luna', 'Misty', 'Cleo', 'Mochi', 'Ginger', 'Nala', 'Pepper', 'Willow', 'Biscuit', 'Olive', 'Hazel', 'Pumpkin'],
+};
 
 /** Случайное имя из подсказок, но не `except` — кнопка «Другое» должна что-то менять. */
 export function suggestName(rand: () => number, except = ''): string {
-  const pool = NAMES.filter((n) => n !== except);
+  const pool = pick(NAMES).filter((n) => n !== except);
   return pool[Math.floor(rand() * pool.length) % pool.length];
 }
 
@@ -59,6 +99,8 @@ export function cleanName(v: unknown): string {
 }
 
 export interface Settings {
+  /** Язык интерфейса; «auto» — как в Windows. Смена перезапускает программу (i18n.ts). */
+  lang: LangPref;
   /** Имя питомца; пусто — ещё не назвали (настройки из версий без имени). */
   name: string;
   /** Кормушка: насыпал порций — кошка ест сама, когда проголодается. */
@@ -89,6 +131,7 @@ export interface Settings {
 
 export function defaults(): Settings {
   return {
+    lang: 'auto',
     name: '',
     feeder: false,
     bed: false,
@@ -127,6 +170,7 @@ export function parse(raw: string | null): Settings {
   if (typeof o !== 'object' || o === null || Array.isArray(o)) return d;
   const s = o as Record<string, unknown>;
   return {
+    lang: oneOf(LANG_PREFS, s.lang, d.lang),
     name: cleanName(s.name),
     feeder: bool(s.feeder, d.feeder),
     bed: bool(s.bed, d.bed),

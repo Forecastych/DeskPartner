@@ -2,6 +2,8 @@
 // с кошкой дома (stats.hours), и по «центру тяжести» этих часов решаем: жаворонок, голубь или сова.
 // В «не свои» часы кошка устаёт быстрее и чаще спит. Часы считаем по кругу: 23 и 1 — соседи.
 
+import { t } from './i18n';
+
 const HOUR = 3_600_000;
 
 export type Chrono = 'lark' | 'dove' | 'owl';
@@ -59,8 +61,8 @@ export function tired(hours: readonly number[], hour: number): number {
 
 /** Строка для окна статистики. */
 export function describe(k: Chrono | null): { value: string; hint: string } {
-  if (k === 'lark') return { value: 'жаворонок', hint: 'клюёт носом по вечерам' };
-  if (k === 'owl') return { value: 'сова', hint: 'отсыпается по утрам' };
-  if (k === 'dove') return { value: 'голубь', hint: 'спит глубокой ночью' };
-  return { value: 'присматривается', hint: 'нужно 10 ч вместе' };
+  if (k === 'lark') return t({ value: 'жаворонок', hint: 'клюёт носом по вечерам' }, { value: 'early bird', hint: 'nods off in the evening' });
+  if (k === 'owl') return t({ value: 'сова', hint: 'отсыпается по утрам' }, { value: 'night owl', hint: 'sleeps in in the morning' });
+  if (k === 'dove') return t({ value: 'голубь', hint: 'спит глубокой ночью' }, { value: 'in between', hint: 'sleeps late at night' });
+  return t({ value: 'присматривается', hint: 'нужно 10 ч вместе' }, { value: 'still figuring out', hint: 'needs 10 h together' });
 }

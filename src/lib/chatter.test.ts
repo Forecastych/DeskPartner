@@ -24,6 +24,7 @@ import {
   vote,
 } from './chatter';
 import { FACTS } from './facts';
+import { setLang } from './i18n';
 import { TOPICS } from './settings';
 
 const MIN = 60_000;
@@ -241,7 +242,7 @@ describe('facts', () => {
     expect(say(ripe(SAT, { next: SAT.getTime() + MIN }), moment(SAT, { topics: ['космос'] }), 'sometimes', mid)[1]).toBeNull();
     const [t, line] = say(ripe(SAT), moment(SAT, { topics: ['космос'] }), 'sometimes', mid);
     expect(line?.key).toBe('fact:космос');
-    expect(FACTS.космос).toContain(line?.text);
+    expect(FACTS.ru.космос).toContain(line?.text);
     expect(t.factIn).toBe(factGap(mid));
     expect(t.topic).toBe('космос');
   });
@@ -286,7 +287,7 @@ describe('facts', () => {
   });
 
   it('does not repeat a fact until the topic runs out', () => {
-    const all = FACTS.теннис;
+    const all = FACTS.ru.теннис;
     const rand = seq();
     let t = ripe(SAT);
     const said: string[] = [];
@@ -308,7 +309,7 @@ describe('facts', () => {
     const [t, line] = say(ripe(SAT), moment(SAT, { topics: ['космос'], extra }), 'sometimes', mid);
     expect(line?.text).toBe(extra.космос[0]);
     const [, again] = say({ ...t, next: 0, factIn: 0 }, moment(at(SAT, GAP_MS), { topics: ['космос'], extra }), 'sometimes', mid);
-    expect(FACTS.космос).toContain(again?.text);
+    expect(FACTS.ru.космос).toContain(again?.text);
   });
 
   it('petting after a fact asks for more of it, a shoo for less', () => {
@@ -336,11 +337,24 @@ describe('facts', () => {
     expect(t.weights.кино).toBe(4);
   });
 
-  it('every topic has a few short facts', () => {
-    for (const topic of TOPICS) {
-      expect(FACTS[topic].length, topic).toBeGreaterThanOrEqual(6);
-      expect(new Set(FACTS[topic]).size, topic).toBe(FACTS[topic].length);
-      for (const f of FACTS[topic]) expect(f.length, f).toBeLessThanOrEqual(90);
+  it('every topic has a few short facts in both languages', () => {
+    for (const lang of ['ru', 'en'] as const)
+      for (const topic of TOPICS) {
+        const list = FACTS[lang][topic];
+        expect(list.length, `${lang} ${topic}`).toBeGreaterThanOrEqual(6);
+        expect(new Set(list).size, `${lang} ${topic}`).toBe(list.length);
+        for (const f of list) expect(f.length, f).toBeLessThanOrEqual(90);
+      }
+  });
+
+  it('speaks English when asked', () => {
+    setLang('en');
+    try {
+      expect(duration(2 * 3600 + 5 * 60)).toBe('2 h 5 min');
+      const [, line] = say(due(TUE), moment(TUE, { today: 0 }), 'sometimes', mid);
+      expect(line?.text).toMatch(/^[\x20-\x7e…]+$/);
+    } finally {
+      setLang('ru');
     }
   });
 });

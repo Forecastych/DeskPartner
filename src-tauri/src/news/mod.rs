@@ -9,6 +9,9 @@
 //! Приватность: наружу уходят только GET к адресам лент — без куки, без идентификаторов,
 //! темы пользователя в запросы не попадают (ленты качаются целиком, выбор — локально).
 //! Нет сети — новостей просто нет, без ошибок.
+//!
+//! Язык: в русском интерфейсе качаются ленты обоих языков, русские в приоритете; в английском —
+//! только английские, русских записей в кэше не остаётся.
 
 mod feeds;
 mod filter;
@@ -45,8 +48,8 @@ const VOTE_UP: f64 = 1.5;
 const VOTE_DOWN: f64 = 0.5;
 const VOTE_MIN: f64 = 0.25;
 const VOTE_MAX: f64 = 4.0;
-/// Русский источник весит вчетверо: английские добирают, когда русских нет или их не любят.
-const RU_BONUS: f64 = 4.0;
+/// Источник на языке интерфейса весит вчетверо: чужой язык добирает, когда своих нет или их не любят.
+const NATIVE_BONUS: f64 = 4.0;
 /// «Обновить сейчас» не качает ленту чаще раза в 5 минут.
 const REFRESH_GAP: i64 = 5 * 60;
 
@@ -77,6 +80,21 @@ struct Cache {
     sources: BTreeMap<String, f64>,
     /// Последняя попытка скачать ленту: url -> когда и удачно ли. Для статуса в настройках.
     fetched: BTreeMap<String, Fetched>,
+    /// Английский интерфейс: язык решается при запуске (i18n.rs), в файл не пишется.
+    #[serde(skip)]
+    en: bool,
+}
+
+impl Cache {
+    /// Язык интерфейса: его новости идут первыми.
+    fn native(&self) -> &'static str {
+        if self.en { "en" } else { "ru" }
+    }
+
+    /// Ленту качаем: тема выбрана, а в английском интерфейсе ещё и лента английская.
+    fn active(&self, f: &Feed) -> bool {
+        self.topics.iter().any(|t| t == f.topic) && (!self.en || f.lang == "en")
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -115,7 +133,7 @@ fn due(cache: &Cache, now: i64) -> Vec<&'static str> {
     let mut seen = HashSet::new();
     FEEDS
         .iter()
-        .filter(|f| cache.topics.iter().any(|t| t == f.topic))
+        .filter(|f| cache.active(f))
         .map(|f| f.url)
         .filter(|url| seen.insert(*url))
         .filter(|url| cache.next.get(*url).is_none_or(|t| *t <= now))
@@ -128,11 +146,10 @@ fn merge(cache: &mut Cache, url: &str, entries: Option<&[Entry]>, now: i64) {
     cache.next.insert(url.to_owned(), now + ttl);
     cache.fetched.insert(url.to_owned(), Fetched { at: now, ok: entries.is_some() });
     let Some(entries) = entries else { return };
-    let feeds: Vec<&Feed> =
-        FEEDS.iter().filter(|f| f.url == url && cache.topics.iter().any(|t| t == f.topic)).collect();
+    let feeds: Vec<&Feed> = FEEDS.iter().filter(|f| f.url == url && cache.active(f)).collect();
     for feed in feeds {
         for e in entries {
-            if !filter::ok(&e.title) || (feed.words && !filter::fits(&e.title, feeds::topic_words(feed.topic))) {
+            if !filter::ok(&e.title) || (feed.words && !filter::fits(&e.title, feeds::topic_words(feed.topic, feed.lang))) {
                 continue;
             }
             // без даты — считаем, что вышла сейчас; дата из будущего — тоже сейчас
@@ -154,21 +171,23 @@ fn merge(cache: &mut Cache, url: &str, entries: Option<&[Entry]>, now: i64) {
     prune(cache, now);
 }
 
-/// Выкинуть старое и лишнее: возраст, лимит на тему, невыбранные темы, забытые сроки.
+/// Выкинуть старое и лишнее: возраст, лимит на тему, невыбранные темы, чужой язык в
+/// английском интерфейсе, забытые сроки.
 fn prune(cache: &mut Cache, now: i64) {
+    let (native, en) = (cache.native(), cache.en);
+    let chosen: HashSet<&str> = FEEDS.iter().filter(|f| cache.active(f)).map(|f| f.url).collect();
     let topics = &cache.topics;
-    cache.items.retain(|i| now - i.date <= MAX_AGE && topics.contains(&i.topic));
-    // под лимит первыми попадают русские, из них — свежие: так же, как их выбирает pick
-    cache.items.sort_by_key(|i| (i.lang != "ru", -i.date));
+    cache.items.retain(|i| now - i.date <= MAX_AGE && topics.contains(&i.topic) && (!en || i.lang == native));
+    // под лимит первыми попадают новости на языке интерфейса, из них — свежие: так же, как их выбирает pick
+    cache.items.sort_by_key(|i| (i.lang != native, -i.date));
     let mut per: BTreeMap<String, usize> = BTreeMap::new();
     cache.items.retain(|i| {
         let n = per.entry(i.topic.clone()).or_default();
         *n += 1;
         *n <= PER_TOPIC
     });
-    let chosen = |url: &String| FEEDS.iter().any(|f| f.url == url && topics.iter().any(|t| t == f.topic));
-    cache.next.retain(|url, _| chosen(url));
-    cache.fetched.retain(|url, _| chosen(url));
+    cache.next.retain(|url, _| chosen.contains(url.as_str()));
+    cache.fetched.retain(|url, _| chosen.contains(url.as_str()));
     // запись не старше показа, а старше трёх дней в кэш не попадает — дольше помнить незачем
     cache.shown.retain(|_, t| now - *t <= MAX_AGE);
 }
@@ -186,10 +205,11 @@ fn set_topics(cache: &mut Cache, topics: &[String], now: i64) -> bool {
 }
 
 /// Новость для облачка. Тема — случайная по весам `topic_w` (их ведёт chatter) из тех, где
-/// есть непоказанное; источник — случайный по голосам, русские с бонусом; от источника —
-/// его самая свежая (у одного источника сначала русские). Выбранная запоминается как показанная.
+/// есть непоказанное; источник — случайный по голосам, свои с бонусом; от источника —
+/// его самая свежая (у одного источника сначала на языке интерфейса). Выбранная запоминается как показанная.
 fn pick(cache: &mut Cache, now: i64, seed: u64, topic_w: &BTreeMap<String, f64>) -> Option<NewsItem> {
     let mut rng = seed;
+    let native = cache.native();
     let fresh = |i: &&NewsItem| !cache.shown.contains_key(&i.link);
     let topics: Vec<(&String, f64)> = cache
         .topics
@@ -201,11 +221,11 @@ fn pick(cache: &mut Cache, now: i64, seed: u64, topic_w: &BTreeMap<String, f64>)
     let mut best: BTreeMap<&str, &NewsItem> = BTreeMap::new();
     for i in cache.items.iter().filter(fresh).filter(|i| &i.topic == topic) {
         let b = best.entry(&i.source).or_insert(i);
-        if (i.lang != "ru", -i.date) < (b.lang != "ru", -b.date) {
+        if (i.lang != native, -i.date) < (b.lang != native, -b.date) {
             *b = i;
         }
     }
-    let bonus = |i: &NewsItem| if i.lang == "ru" { RU_BONUS } else { 1.0 };
+    let bonus = |i: &NewsItem| if i.lang == native { NATIVE_BONUS } else { 1.0 };
     let sources: Vec<(&NewsItem, f64)> =
         best.values().map(|i| (*i, weight(&cache.sources, &i.source) * bonus(i))).collect();
     let item = draw(&sources, &mut rng)?.clone();
@@ -250,13 +270,13 @@ fn next01(s: &mut u64) -> f64 {
 fn status(cache: &Cache) -> Vec<FeedStatus> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for f in FEEDS.iter().filter(|f| cache.topics.iter().any(|t| t == f.topic)) {
+    for f in FEEDS.iter().filter(|f| cache.active(f)) {
         if !seen.insert(f.url) {
             continue;
         }
         let topics: Vec<String> = FEEDS
             .iter()
-            .filter(|g| g.url == f.url && cache.topics.iter().any(|t| t == g.topic))
+            .filter(|g| g.url == f.url && cache.active(g))
             .map(|g| g.topic.to_owned())
             .collect();
         let last = cache.fetched.get(f.url);
@@ -306,6 +326,7 @@ fn with_cache<R>(f: impl FnOnce(&mut Cache) -> R) -> R {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        c.en = crate::i18n::en();
         prune(&mut c, now());
         c
     });
@@ -551,6 +572,26 @@ mod tests {
     }
 
     #[test]
+    fn english_interface_keeps_to_english() {
+        let mut c = cache(&["аниме", "кино"]);
+        c.en = true;
+        let urls = due(&c, NOW);
+        assert!(urls.contains(&"https://www.animenewsnetwork.com/news/rss.xml"));
+        assert!(!urls.contains(&KINONEWS) && !urls.iter().any(|u| u.contains("shikimori")), "русские не качаем");
+        assert!(status(&c).iter().all(|f| f.lang == "en"));
+
+        merge(&mut c, KINONEWS, Some(&[entry("Ари Астер начал съёмки нового фильма", "https://k/1", Some(NOW))]), NOW);
+        assert!(c.items.is_empty(), "русскую ленту не раскладываем, даже если она пришла");
+        c.items.push(item("аниме", "ru", "https://a/ru-new", NOW));
+        c.items.push(item("аниме", "en", "https://a/en-old", NOW - 3600));
+        c.next.insert("https://shikimori.io/forum/news.rss".into(), NOW);
+        prune(&mut c, NOW);
+        assert_eq!(c.items.iter().map(|i| i.link.as_str()).collect::<Vec<_>>(), ["https://a/en-old"]);
+        assert!(c.next.is_empty(), "сроки русских лент забыты");
+        assert_eq!(pick(&mut c, NOW, 0, &BTreeMap::new()).unwrap().link, "https://a/en-old");
+    }
+
+    #[test]
     fn pick_skips_shared_links() {
         for seed in 0..20 {
             let mut c = cache(&["наука", "животные"]);
@@ -672,14 +713,17 @@ mod tests {
     }
 
     /// Ручной прогон всех лент по сети: `cargo test -- --ignored live_feeds --nocapture`.
+    /// С `DESKPARTNER_LANG=en` — как в английском интерфейсе: только английские ленты.
     #[test]
     #[ignore]
     fn live_feeds() {
         let agent = agent();
         let now = now();
         let mut c = cache(&TOPICS);
+        c.en = std::env::var("DESKPARTNER_LANG").is_ok_and(|l| l == "en");
         let mut seen = HashSet::new();
-        for f in FEEDS {
+        let feeds: Vec<&Feed> = FEEDS.iter().filter(|f| c.active(f)).collect();
+        for f in feeds {
             if !seen.insert(f.url) {
                 continue;
             }
@@ -700,8 +744,10 @@ mod tests {
             let items: Vec<&NewsItem> = c.items.iter().filter(|i| i.topic == t).collect();
             let ru = items.iter().filter(|i| i.lang == "ru").count();
             println!("{t:<17} {:>2} в кэше (ru {ru})", items.len());
-            for i in items.iter().take(3) {
-                println!("      {} ({})", i.title, i.source);
+            for lang in ["ru", "en"] {
+                for i in items.iter().filter(|i| i.lang == lang).take(3) {
+                    println!("   {lang} {} ({})", i.title, i.source);
+                }
             }
         }
     }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { setLang } from './i18n';
 import { appFolderFor, dirHint, driveOf, errorText, isDriveRoot, pickDir, samePath } from './setup';
 
 describe('isDriveRoot', () => {
@@ -56,6 +57,16 @@ describe('pickDir', () => {
 });
 
 describe('dirHint', () => {
+  it('по-английски', () => {
+    setLang('en');
+    try {
+      expect(dirHint(0, 2, 'D:\\DeskPartner')).toBe('separate drive D:');
+      expect(errorText(null)).toMatch(/went wrong/);
+    } finally {
+      setLang('ru');
+    }
+  });
+
   it('последняя — папка пользователя, остальные — диски', () => {
     expect(dirHint(0, 2, 'D:\\DeskPartner')).toBe('отдельный диск D:');
     expect(dirHint(1, 2, 'C:\\Users\\vlad\\DeskPartner')).toBe('в папке пользователя, на системном диске');

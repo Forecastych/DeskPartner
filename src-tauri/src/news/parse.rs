@@ -272,7 +272,7 @@ fn invisible(c: char) -> bool {
 /// Приписки ленты в конце заголовка: « — читать на Gastronom.ru», «  •  Журнал», « — GPblog».
 fn strip_tail(s: &str) -> &str {
     let lower = s.to_lowercase();
-    let credit = [" — читать на ", " - читать на ", ", читайте на ", " — читайте на "];
+    let credit = [" — читать на ", " - читать на ", ", читайте на ", " — читайте на ", " - read more", " – read more", " — read more", " | read more"];
     if let Some(i) = credit.iter().find_map(|c| lower.find(c)) {
         // to_lowercase для кириллицы и латиницы длину в байтах не меняет
         if s.is_char_boundary(i) {
@@ -282,9 +282,17 @@ fn strip_tail(s: &str) -> &str {
     for sep in [" • ", " — ", " | "] {
         if let Some(i) = s.rfind(sep) {
             let tail = s[i + sep.len()..].trim();
-            let one_word = !tail.contains(' ') && tail.chars().count() <= 20;
-            // после • и | — любая короткая приписка; после тире — только латинское имя источника
-            let credit = sep != " — " || tail.chars().all(|c| c.is_ascii_alphanumeric() || c == '.');
+            // после | бывает рубрика в несколько слов: «… – recipe | The good mixer» у Guardian
+            let one_word = if sep == " | " {
+                tail.split_whitespace().count() <= 4 && tail.chars().count() <= 30
+            } else {
+                !tail.contains(' ') && tail.chars().count() <= 20
+            };
+            // после • и | — любая короткая приписка; после тире — только латинское имя источника под
+            // русским заголовком: в английском «Arsenal win the derby — again» это ещё сам заголовок
+            let latin = tail.chars().all(|c| c.is_ascii_alphanumeric() || c == '.');
+            let russian = s[..i].chars().any(|c| matches!(c, 'а'..='я' | 'А'..='Я' | 'ё' | 'Ё'));
+            let credit = sep != " — " || (latin && russian);
             if one_word && credit && !tail.is_empty() && s[..i].chars().count() >= 20 {
                 return s[..i].trim_end();
             }
@@ -439,6 +447,10 @@ mod tests {
         // русское после тире — часть заголовка
         assert_eq!(clean_title("Бронзовая медаль досталась сборной — Россия"), "Бронзовая медаль досталась сборной — Россия");
         assert_eq!(clean_title("Луна\u{200a}—\u{202a}спутник\u{202c}"), "Луна —спутник");
+        // английское после тире — тоже часть заголовка, а «read more» — приписка
+        assert_eq!(clean_title("Arsenal win the north London derby — again"), "Arsenal win the north London derby — again");
+        assert_eq!(clean_title("Pixel 11 leaks in full ahead of launch - Read more at Example.com"), "Pixel 11 leaks in full ahead of launch");
+        assert_eq!(clean_title("Cocktail of the week: the fallen leaf – recipe | The good mixer"), "Cocktail of the week: the fallen leaf – recipe");
         assert_eq!(clean_title("3 < 5, а <b>жирный</b> текст"), "3 < 5, а жирный текст");
     }
 

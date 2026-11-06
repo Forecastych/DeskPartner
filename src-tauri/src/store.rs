@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use crate::i18n::{en, tr};
 
 /// Ключи состояния фронтенда: их файлы переезжают при смене папки.
 pub const KEYS: [&str; 9] = ["belly", "sleep", "stats", "spot", "settings", "bowl", "bed", "talk", "revenge"];
@@ -31,7 +32,7 @@ fn location_file() -> Result<PathBuf, String> {
     let base = std::env::var_os("APPDATA").map(PathBuf::from);
     #[cfg(not(windows))]
     let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"));
-    base.map(|b| b.join(NAME).join("location.json")).ok_or_else(|| "не найдена папка профиля".into())
+    base.map(|b| b.join(NAME).join("location.json")).ok_or_else(|| tr("не найдена папка профиля", "user profile folder not found").into())
 }
 
 /// Папка из location.json. Нет файла, он битый, путь относительный или папки уже нет —
@@ -66,7 +67,7 @@ fn probe(dir: &Path) -> Result<(), String> {
     if ok && removed {
         Ok(())
     } else {
-        Err("в эту папку не получается писать".into())
+        Err(tr("в эту папку не получается писать", "can't write to this folder").into())
     }
 }
 
@@ -102,7 +103,7 @@ fn copy_states(from: &Path, to: &Path) -> Result<Vec<PathBuf>, String> {
             for (_, d) in &copied {
                 let _ = fs::remove_file(d);
             }
-            return Err(format!("не получилось перенести {key}.json: {err}"));
+            return Err(if en() { format!("couldn't move {key}.json: {err}") } else { format!("не получилось перенести {key}.json: {err}") });
         }
         copied.push((src, dst));
     }
@@ -115,20 +116,20 @@ fn copy_states(from: &Path, to: &Path) -> Result<Vec<PathBuf>, String> {
 pub fn set_dir(location: &Path, dir: &str) -> Result<(), String> {
     let dir = PathBuf::from(dir);
     if !dir.is_absolute() {
-        return Err("нужен полный путь к папке".into());
+        return Err(tr("нужен полный путь к папке", "a full folder path is needed").into());
     }
-    fs::create_dir_all(&dir).map_err(|e| format!("не получается создать папку: {e}"))?;
+    fs::create_dir_all(&dir).map_err(|e| if en() { format!("can't create the folder: {e}") } else { format!("не получается создать папку: {e}") })?;
     probe(&dir)?;
     let prev = read_dir(location).filter(|p| !same_dir(p, &dir));
     let moved = match &prev {
         Some(p) => copy_states(p, &dir)?,
         None => Vec::new(),
     };
-    let parent = location.parent().ok_or("не найдена папка профиля")?;
+    let parent = location.parent().ok_or(tr("не найдена папка профиля", "user profile folder not found"))?;
     let json = serde_json::to_string(&Location { dir: dir.to_string_lossy().into_owned() }).map_err(|e| e.to_string())?;
     fs::create_dir_all(parent)
         .and_then(|_| write_atomic(location, json.as_bytes()))
-        .map_err(|e| format!("не получается запомнить папку: {e}"))?;
+        .map_err(|e| if en() { format!("can't remember the folder: {e}") } else { format!("не получается запомнить папку: {e}") })?;
     for src in moved {
         // не удалился — останется лишняя копия в старой папке, но данные уже в новой
         let _ = fs::remove_file(src);
@@ -148,14 +149,15 @@ pub fn load(dir: Option<&Path>, key: &str) -> Result<Option<String>, String> {
     match fs::read_to_string(state_file(dir, key)) {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("не получается прочитать {key}.json: {e}")),
+        Err(e) => Err(if en() { format!("can't read {key}.json: {e}") } else { format!("не получается прочитать {key}.json: {e}") }),
     }
 }
 
 pub fn save(dir: Option<&Path>, key: &str, value: &str) -> Result<(), String> {
     check_key(key)?;
-    let dir = dir.ok_or("папка данных не выбрана")?;
-    write_atomic(&state_file(dir, key), value.as_bytes()).map_err(|e| format!("не получается сохранить {key}.json: {e}"))
+    let dir = dir.ok_or(tr("папка данных не выбрана", "no data folder chosen"))?;
+    write_atomic(&state_file(dir, key), value.as_bytes())
+        .map_err(|e| if en() { format!("can't save {key}.json: {e}") } else { format!("не получается сохранить {key}.json: {e}") })
 }
 
 /// Сначала несистемные локальные диски (`X:\DeskPartner`), последним — папка пользователя.

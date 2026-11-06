@@ -5,6 +5,7 @@
   import { emitTo } from '@tauri-apps/api/event';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { onMount } from 'svelte';
+  import { t } from './lib/i18n';
   import { parse } from './lib/settings';
   import * as tally from './lib/stats';
   import { Dialog, Hint, Section } from './ui';
@@ -47,7 +48,7 @@
   });
 </script>
 
-<Dialog title={name ? `${name}: статистика` : 'Статистика'}>
+<Dialog title={name ? `${name}: ${t('статистика', 'stats')}` : t('Статистика', 'Stats')}>
   {#if stats}
     {#each groups as g, i (g.title)}
       <Section title={g.title} rule={i > 0}>
@@ -69,9 +70,9 @@
         </dl>
       </Section>
     {/each}
-    <Hint>Цифры живут только в папке данных на этом компьютере и никуда не отправляются.</Hint>
+    <Hint>{t('Цифры живут только в папке данных на этом компьютере и никуда не отправляются.', 'These numbers live only in the data folder on this computer and are never sent anywhere.')}</Hint>
   {:else}
-    <Hint>Считаем…</Hint>
+    <Hint>{t('Считаем…', 'Counting…')}</Hint>
   {/if}
 </Dialog>
 

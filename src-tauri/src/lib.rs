@@ -8,6 +8,7 @@ mod bubble;
 mod call;
 mod esc;
 mod hit;
+mod i18n;
 mod laser;
 mod media;
 mod menu;
@@ -201,7 +202,7 @@ fn open_sprites(app: &AppHandle) -> tauri::Result<()> {
 /// Закрыли, не закончив, — питомцу негде хранить свою жизнь, выходим.
 fn build_setup_window(app: &AppHandle) -> tauri::Result<()> {
     let w = WebviewWindowBuilder::new(app, "setup", WebviewUrl::App("index.html".into()))
-        .title("DeskPartner — первый запуск")
+        .title(i18n::tr("DeskPartner — первый запуск", "DeskPartner — first launch"))
         // рамка своя, пиксельная (src/ui): +32 под её полосу заголовка; тень системная
         .inner_size(560.0, 712.0)
         .decorations(false)
@@ -227,7 +228,7 @@ fn build_setup_window(app: &AppHandle) -> tauri::Result<()> {
 #[tauri::command]
 async fn finish_setup(app: AppHandle) -> Result<(), String> {
     if !store::has_dir() {
-        return Err("папка данных не выбрана".into());
+        return Err(i18n::tr("папка данных не выбрана", "no data folder chosen").into());
     }
     // повторный вызов (двойной клик по кнопке) не должен строить окна с занятыми метками
     if app.get_webview_window("pet").is_none() {
@@ -249,7 +250,7 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
         return w.set_focus();
     }
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
-        .title("DeskPartner — настройки")
+        .title(i18n::tr("DeskPartner — настройки", "DeskPartner — settings"))
         .inner_size(560.0, 752.0)
         .min_inner_size(460.0, 512.0)
         .decorations(false)
@@ -275,7 +276,7 @@ fn show_stats(app: &AppHandle) -> tauri::Result<()> {
         return w.set_focus();
     }
     WebviewWindowBuilder::new(app, "stats", WebviewUrl::App("index.html".into()))
-        .title("DeskPartner — статистика")
+        .title(i18n::tr("DeskPartner — статистика", "DeskPartner — stats"))
         .inner_size(560.0, 640.0)
         .min_inner_size(400.0, 360.0)
         .decorations(false)
@@ -298,12 +299,23 @@ async fn open_stats(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn move_data_dir(app: AppHandle, dir: String) -> Result<(), String> {
     store::set_data_dir(dir)?;
+    restart_into_settings(&app);
+    Ok(())
+}
+
+/// Сменили язык: перезапуститься, чтобы трей и все окна построились заново уже на нём.
+/// Настройки с новым языком окно к этому времени уже сохранило.
+#[tauri::command]
+fn relaunch(app: AppHandle) {
+    restart_into_settings(&app);
+}
+
+fn restart_into_settings(app: &AppHandle) {
     // новый процесс наследует окружение: по пометке он сразу откроет настройки, человек был в них
     std::env::set_var(REOPEN_SETTINGS, "1");
     // не restart(): тот из главного потока выходит сразу, не ответив окну. request_restart
     // выходит обычным путём, и single-instance успевает отпустить мьютекс до нового запуска
     app.request_restart();
-    Ok(())
 }
 
 /// Пометка «перезапустились из окна настроек — открыть его снова». Живёт в окружении
@@ -344,6 +356,7 @@ fn boss(app: &AppHandle) {
 
 /// Пункты меню трея: то же пиксельное меню, что у кошки по ПКМ (menu.rs).
 fn tray_items() -> Vec<menu::Item> {
+    use i18n::tr;
     let entry = |id: &str, text: &str, hint: Option<&str>| menu::Item::Entry {
         id: id.into(),
         text: text.into(),
@@ -355,14 +368,14 @@ fn tray_items() -> Vec<menu::Item> {
     // проверить облачко, голод, мышь, клубок, новость и месть, не дожидаясь сроков; в релиз не попадает
     if cfg!(debug_assertions) {
         items.extend([
-            entry("dev-say", "Сказать что-нибудь (dev)", None),
-            entry("dev-hungry", "Проголодаться (dev)", None),
+            entry("dev-say", "Say something (dev)", None),
+            entry("dev-hungry", "Get hungry (dev)", None),
             // охотник или клубок выключен — включит
-            entry("dev-hunter", "Охотник (dev)", None),
-            entry("dev-yarn", "Клубок (dev)", None),
-            entry("dev-news", "Новость (dev)", None),
+            entry("dev-hunter", "Hunter (dev)", None),
+            entry("dev-yarn", "Yarn (dev)", None),
+            entry("dev-news", "News (dev)", None),
             // обида без шанса и перезарядки; в «не мешать» и на созвоне всё равно нет
-            entry("dev-revenge", "Месть (dev)", None),
+            entry("dev-revenge", "Revenge (dev)", None),
             menu::Item::Separator { separator: true },
         ]);
     }
@@ -373,22 +386,22 @@ fn tray_items() -> Vec<menu::Item> {
     }
     items.extend([
         // кошка умеет уходить за край экрана — отсюда её зовут обратно
-        entry("call", "Позвать питомца", Some("если ушла за край экрана")),
+        entry("call", tr("Позвать питомца", "Call your pet"), Some(tr("если ушла за край экрана", "if she wandered off screen"))),
         // некормленый кот уходит навсегда — без этого пункта вернуть питомца было бы нечем
-        entry("adopt", "Новый котик", Some("если прежний сбежал")),
+        entry("adopt", tr("Новый котик", "Adopt a new cat"), Some(tr("если прежний сбежал", "if the last one ran away"))),
     ]);
     #[cfg(windows)]
     items.push(if win::bossed() {
-        entry("boss", "Показать питомца", Some("Ctrl+Alt+H"))
+        entry("boss", tr("Показать питомца", "Show your pet"), Some("Ctrl+Alt+H"))
     } else {
-        entry("boss", "Спрятать питомца", Some("Ctrl+Alt+H — и обратно"))
+        entry("boss", tr("Спрятать питомца", "Hide your pet"), Some(tr("Ctrl+Alt+H — и обратно", "Ctrl+Alt+H to bring back")))
     });
     items.extend([
         menu::Item::Separator { separator: true },
-        entry("stats", "Статистика…", None),
-        entry("settings", "Настройки…", None),
+        entry("stats", tr("Статистика…", "Stats…"), None),
+        entry("settings", tr("Настройки…", "Settings…"), None),
         menu::Item::Separator { separator: true },
-        entry("quit", "Выход", None),
+        entry("quit", tr("Выход", "Quit"), None),
     ]);
     items
 }
@@ -465,6 +478,8 @@ pub fn run() {
             open_settings,
             open_stats,
             move_data_dir,
+            relaunch,
+            i18n::lang,
             name_pet,
             menu::open_menu,
             menu::menu_size,
@@ -499,6 +514,8 @@ pub fn run() {
             news::news_refresh,
         ])
         .setup(move |app| {
+            // язык — до окон и трея: они строятся уже на нём
+            i18n::init();
             #[cfg(windows)]
             {
                 let h = app.handle().clone();

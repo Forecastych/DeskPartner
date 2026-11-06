@@ -6,6 +6,7 @@
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { open } from '@tauri-apps/plugin-dialog';
   import { onMount, tick } from 'svelte';
+  import { LANG_PREFS, t, type LangPref } from './lib/i18n';
   import { defaults, parse, serialize, type Settings } from './lib/settings';
   import { dirHint, errorText, isDriveRoot, pickDir, samePath } from './lib/setup';
   import NewsFeeds from './NewsFeeds.svelte';
@@ -44,6 +45,12 @@
   let fromPet = false;
   /** Ключ печатают, а сохранение ещё не ушло. */
   let keyTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Язык, с которым программа запущена: выбрали другой — после сохранения перезапуск. */
+  let startLang: LangPref | null = null;
+  let relaunching = $state(false);
+
+  /** Названия языков — каждый на себе: заблудившийся в чужом языке найдёт свой. */
+  const LANG_NAMES: Record<LangPref, string> = { auto: '', ru: 'Русский', en: 'English' };
 
   onMount(() => {
     load();
@@ -72,10 +79,11 @@
         invoke<string | null>('data_dir'),
       ]);
       if (!fromPet) Object.assign(settings, parse(raw));
+      startLang = settings.lang;
       current = dataDir ?? '';
       loaded = true;
     } catch (e) {
-      saveError = `Не удалось прочитать настройки: ${errorText(e)}`;
+      saveError = `${t('Не удалось прочитать настройки', "Couldn't read the settings")}: ${errorText(e)}`;
     }
     try {
       suggested = await invoke<string[]>('suggest_dirs');
@@ -112,8 +120,16 @@
       saveError = '';
       saved = true;
     } catch (e) {
-      saveError = `Не удалось сохранить: ${errorText(e)}`;
+      saveError = `${t('Не удалось сохранить', "Couldn't save")}: ${errorText(e)}`;
       saved = false;
+      return;
+    }
+    if (startLang !== null && s.lang !== startLang && !relaunching) {
+      relaunching = true;
+      await invoke<void>('relaunch').catch((e) => {
+        relaunching = false;
+        saveError = errorText(e);
+      });
     }
   }
 
@@ -131,10 +147,10 @@
   async function browse() {
     moveError = '';
     try {
-      const picked = await open({ directory: true, title: 'Новая папка для данных питомца', defaultPath: dir || current || undefined });
+      const picked = await open({ directory: true, title: t('Новая папка для данных питомца', 'New folder for pet data'), defaultPath: dir || current || undefined });
       if (typeof picked === 'string') take(picked);
     } catch (e) {
-      moveError = `Не удалось открыть выбор папки: ${errorText(e)}`;
+      moveError = `${t('Не удалось открыть выбор папки', "Couldn't open the folder picker")}: ${errorText(e)}`;
     }
   }
 
@@ -164,13 +180,13 @@
     const path = dir.trim();
     moveError = '';
     if (!path) {
-      moveError = 'Выбери новую папку.';
+      moveError = t('Выбери новую папку.', 'Pick a new folder.');
       return refocus(dirInput);
     }
     // как в мастере: вписали корень руками — сначала показать подпапку, а не молча её создать
     if (isDriveRoot(path) && path !== keepRoot) return take(path);
     if (samePath(path, current)) {
-      moveError = 'Данные уже лежат в этой папке.';
+      moveError = t('Данные уже лежат в этой папке.', 'The data is already in this folder.');
       return refocus(dirInput);
     }
     moving = true;
@@ -190,19 +206,34 @@
   }
 </script>
 
-<Dialog title="DeskPartner" busy={moving}>
+<Dialog title="DeskPartner" busy={moving || relaunching}>
   {#snippet header()}
-    <h1>Настройки</h1>
+    <h1>{t('Настройки', 'Settings')}</h1>
   {/snippet}
 
   <!-- change всплывает от любого поля: так автосохранению не нужно знать, какие поля есть.
        input — только ради ключа TMDB, см. typed -->
   <div onchange={changed} oninput={typed}>
-    <Section title="Питомец и темы">
+    <Section title={t('Язык · Language', 'Language · Язык')}>
+      <Group legend={t('Язык интерфейса', 'Interface language')}>
+        {#each LANG_PREFS as l}
+          <Radio name="lang" value={l} bind:group={settings.lang} disabled={!loaded || moving || relaunching}>
+            {LANG_NAMES[l] || t('Как в Windows', 'Same as Windows')}
+          </Radio>
+        {/each}
+      </Group>
+      <Hint>
+        {relaunching
+          ? t('Перезапускаемся…', 'Restarting…')
+          : t('Питомец перезапустится на выбранном языке.', 'The pet restarts in the chosen language.')}
+      </Hint>
+    </Section>
+
+    <Section title={t('Питомец и темы', 'Pet and topics')} rule>
       <SettingsFields bind:settings part="pet" disabled={!loaded || moving} />
     </Section>
 
-    <Section title="Главные галочки" rule>
+    <Section title={t('Главные галочки', 'Main switches')} rule>
       <SettingsFields bind:settings part="toggles" disabled={!loaded || moving} />
     </Section>
   </div>
@@ -211,17 +242,17 @@
     <Hint tone="error">{saveError}</Hint>
   {/if}
 
-  <Section title="Новости" rule>
+  <Section title={t('Новости', 'News')} rule>
     <NewsFeeds />
   </Section>
 
-  <Section title="Папка данных" rule>
+  <Section title={t('Папка данных', 'Data folder')} rule>
     <p>
-      Сейчас: <span class="ui-mono">{current || 'не выбрана'}</span>
+      {t('Сейчас', 'Now')}: <span class="ui-mono">{current || t('не выбрана', 'not chosen')}</span>
     </p>
 
     {#if suggested.length}
-      <Group legend="Предлагаем">
+      <Group legend={t('Предлагаем', 'Suggested')}>
         {#each suggested as s, i}
           <Radio
             name="dir"
@@ -229,7 +260,7 @@
             bind:group={dir}
             onchange={() => take(s)}
             disabled={moving}
-            hint="{dirHint(i, suggested.length, s)}{samePath(s, current) ? ' — сейчас здесь' : ''}"
+            hint="{dirHint(i, suggested.length, s)}{samePath(s, current) ? t(' — сейчас здесь', ' (current)') : ''}"
           >
             <span class="ui-mono">{s}</span>
           </Radio>
@@ -239,34 +270,39 @@
 
     <TextInput
       id="dir"
-      label="Новая папка"
+      label={t('Новая папка', 'New folder')}
       bind:el={dirInput}
       bind:value={dir}
       onchange={() => take(dir)}
       mono
       spellcheck="false"
       autocomplete="off"
-      placeholder="Например, E:\DeskPartner"
+      placeholder={t('Например, E:\\DeskPartner', 'For example, E:\\DeskPartner')}
       aria-describedby="move-how"
       disabled={moving}
     >
-      <Button onclick={browse} disabled={moving}>Обзор…</Button>
+      <Button onclick={browse} disabled={moving}>{t('Обзор…', 'Browse…')}</Button>
     </TextInput>
 
     {#if rootPicked}
       <Hint tone="note" role="status">
-        <span>Это корень диска {rootPicked} — сложим всё в отдельную папку <span class="ui-mono">{dir}</span>.</span>
-        <Button variant="link" onclick={useRoot}>Нет, прямо в корень</Button>
+        <span
+          >{t(`Это корень диска ${rootPicked} — сложим всё в отдельную папку`, `${rootPicked} is a drive root, so everything goes into its own folder`)}
+          <span class="ui-mono">{dir}</span>.</span
+        >
+        <Button variant="link" onclick={useRoot}>{t('Нет, прямо в корень', 'No, right in the root')}</Button>
       </Hint>
     {/if}
 
     <Hint id="move-how">
-      Данные переедут в новую папку, и питомец перезапустится. Если там уже лежат данные
-      питомца, будут использованы они, а не нынешние.
+      {t(
+        'Данные переедут в новую папку, и питомец перезапустится. Если там уже лежат данные питомца, будут использованы они, а не нынешние.',
+        "The data moves to the new folder and the pet restarts. If that folder already has pet data, that data is used instead of the current one.",
+      )}
     </Hint>
 
     <Button variant="primary" onclick={move} disabled={moving} aria-describedby="move-how">
-      {moving ? 'Переносим…' : 'Перенести'}
+      {moving ? t('Переносим…', 'Moving…') : t('Перенести', 'Move')}
     </Button>
 
     {#if moveError}
@@ -276,7 +312,7 @@
 
   {#snippet footer()}
     <span class="saved" role="status">
-      {saved ? 'Сохранено.' : 'Изменения сохраняются сразу.'}
+      {saved ? t('Сохранено.', 'Saved.') : t('Изменения сохраняются сразу.', 'Changes are saved right away.')}
     </span>
   {/snippet}
 </Dialog>

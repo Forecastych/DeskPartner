@@ -4,6 +4,11 @@
 //! Слова сравниваются по началу слова в нижнем регистре, ё = е: «погиб» ловит «погибли»
 //! и «погибших», но не «непогибший» внутри другого слова. `$` на конце — только слово
 //! целиком («умер$» не ловит «умеренный»). Пробел внутри — фраза целиком.
+//!
+//! Английский список — не перевод русского: в английском одно слово чаще значит разное.
+//! «dead» есть в Dead Space, «war» — в God of War, «death» — в Death Stranding, «shooting» —
+//! это ещё и съёмки фильма, «injury» — обычная спортивная новость, а Hurricanes и Avalanche —
+//! хоккейные клубы. Поэтому там почти везде слово целиком или фраза.
 
 /// Тяжёлое: о таком кошка радостно не рассказывает. Лучше лишний раз промолчать.
 const HEAVY: &[&str] = &[
@@ -27,21 +32,41 @@ const HEAVY: &[&str] = &[
     // политика: кошка вне её. «трамп» целиком — иначе зацепит «трамплин»
     "путин", "зеленск", "трамп$", "трампа$", "трампу$", "трампом$", "байден", "кремл", "санкци", "госдум",
     "депутат", "митинг",
-    // English
-    "dead$", "death", "dies$", "died$", "dying", "kill", "murder", "suicide", "crash", "war$", "wars$", "warfare",
-    "bomb", "terror", "shooting", "gunman", "shot dead", "rape", "abuse", "assault", "arrest", "convicted",
-    "sentenced", "prison", "jail", "disaster", "tragedy", "tragic", "victim", "injur", "wildfire", "flood",
-    "earthquake", "hurricane", "tsunami", "pandemic", "epidemic", "cancer", "funeral", "obituary", "trump",
-    "biden", "putin", "sanction", "allegation", "lawsuit", "military", "missile", "hostage",
+    // English: смерть
+    "dies$", "died$", "dead at", "found dead", "shot dead", "death of", "deaths$", "death toll", "to death",
+    "death penalty", "passed away", "passes away", "obituary", "funeral", "mourn",
+    // насилие и преступления
+    "kill$", "killed$", "killing$", "killings$", "murder", "suicide", "massacre", "genocide", "stabbed$", "stabbing", "kidnap", "abduct",
+    "hostage", "terror", "mass shooting", "school shooting", "fatal shooting", "opened fire", "gunman", "gunmen",
+    "rape$", "raped$", "rapist", "abuse", "assault", "arrested$", "arrest$", "arrests$", "convicted", "sentenced",
+    "prison", "jail$", "jailed$", "fraud", "overdose", "trafficking",
+    // беды
+    "car crash", "plane crash", "air crash", "train crash", "helicopter crash", "fatally", "explosion", "disaster",
+    "tragedy", "tragic", "victim", "seriously injured", "critically injured", "hospitalised", "hospitalized",
+    "wildfire", "flooding", "floods$", "earthquake", "hurricane$", "tornado", "tsunami", "famine", "pandemic",
+    "epidemic", "cancer",
+    // война
+    "at war", "civil war", "world war", "war crime", "invasion", "troops$", "airstrike", "air strike", "drone strike",
+    "bombing", "shelling", "military", "missile", "ceasefire", "gaza$", "hamas$", "hezbollah", "refugee",
+    // политика: «senator$» целиком — Ottawa Senators играют в хоккей
+    "trump$", "biden$", "putin$", "zelensky", "sanctions$", "tariff", "election", "congress", "parliament",
+    "prime minister", "white house", "senator$",
+    // суды и увольнения
+    "allegation", "lawsuit", "sued$", "sues$", "layoff", "laid off", "racism", "racist",
 ];
 
-/// Реклама, распродажи и подборки «что купить».
+/// Реклама, распродажи, ставки и подборки «что купить».
 /// «Промоутер» в боксе, «розыгрыш Кубка» и «конкурс Чайковского» — не реклама, поэтому без них.
+/// По-английски так же: «promoted» — выход в Премьер-лигу, «deal» — контракт игрока,
+/// «buy» — покупка компании, «sale» — продажа картины на аукционе, «odds» — «вопреки всему».
 const ADS: &[&str] = &[
     "реклам", "промо$", "промоакци", "промокод", "партнерск", "спонсор", "erid", "скидк", "распродаж",
-    "купить", "кэшбэк", "кешбэк", "акция$", "акции$", "подписк", "sponsored", "promoted", "advertis",
-    "partner content", "promo$", "promotional", "deal$", "deals$", "sale$", "coupon", "discount", "gift",
-    "buy$", "black friday", "черная пятница",
+    "купить", "кэшбэк", "кешбэк", "акция$", "акции$", "подписк", "черная пятница",
+    "sponsored", "promoted content", "advertis", "partner content", "promo$", "promo code", "promotional",
+    "affiliate", "deals$", "deal of the day", "flash sale", "on sale now", "coupon", "discount", "gift$", "gifts$",
+    "gift guide", "buy now", "where to buy", "black friday", "cyber monday", "prime day", "price cut",
+    "lowest price", "all-time low", "giveaway", "betting", "best bets", "best odds", "odds boost", "parlay",
+    "sportsbook", "now accepting", "accepting applications", "apply now",
 ];
 
 /// Не новость, а повод кликнуть или формат без смысла для облачка.
@@ -50,15 +75,21 @@ const BAIT_ANYWHERE: &[&str] = &[
     "шок$", "шокир", "сенсаци", "не поверите", "фотогалере", "трансляци", "онлайн$", "видео:", "тест:", "тест на",
     "викторин", "опрос", "подкаст", "выпуск$", "гороскоп", "диетолог", "похуд",
     // «Ветеринар раскрыла симптом…» — формат Ленты; «учёные раскрыли механизм» оставляем
-    "раскрыл$", "раскрыла$", "won't believe", "jaw-dropping",
-    "mind-blowing", "quiz", "live:", "live blog", "horoscope", "podcast", "in pictures", "– video", "— video",
+    "раскрыл$", "раскрыла$",
+    // English: «gallery» без «photo» не трогаем — National Gallery это искусство
+    "won't believe", "jaw-dropping", "mind-blowing", "quiz", "live:", "live blog", "live updates", "as it happened",
+    "– live", "— live", "horoscope", "podcast", "newsletter", "in pictures", "in photos", "photos:", "photo gallery",
+    "– video", "— video", "video:", "watch:", "ending explained", "recap$", "spoilers", "crossword", "wordle",
+    "sudoku", "you should",
 ];
 
 /// Кликбейт, если с этого заголовок начинается: «Назван простой способ…», «Вот почему…».
 /// Сравнивается с началом строки, поэтому «назван» ловит и «названы», и «названа».
 const BAIT_START: &[&str] = &[
     "назван", "раскрыт", "раскрыл", "выяснилось", "стало известно", "вот почему", "вот что", "вот как",
-    "что будет", "here's why", "this is why", "here's what", "you need", "what happens",
+    "что будет", "here's why", "this is why", "here's what", "here's how", "you need", "what happens",
+    "everything we know", "everything you need", "what to know", "how to watch", "where to watch", "where to buy",
+    "the best ", "best ",
 ];
 
 /// Короче — не мысль, а обрывок: «Месяц волшебства».
@@ -132,6 +163,14 @@ mod tests {
             "Actor dies at 84 after long illness",
             "Three killed in highway crash",
             "Why pharma firms are going to orbit in search of cancer drugs",
+            "Mass shooting at a shopping mall in Texas",
+            "Death toll rises after the earthquake in Turkey",
+            "Former footballer found dead at his home",
+            "Trump's tariffs hit console prices again",
+            "Gaza ceasefire talks resume in Cairo",
+            "Studio founder arrested over fraud claims",
+            "Hunters were paid to kill newborn wolf pups, records show",
+            "Trial in forest guardian killing delayed again",
         ] {
             assert!(heavy(t), "пропустили тяжёлое: {t}");
         }
@@ -146,6 +185,19 @@ mod tests {
             "Капризов и Шестеркин — в топ-9 претендентов на Зал славы",
             "Webb spots a new exoplanet with an oxygen atmosphere",
             "Захватывающий финал: Алькарас вышел в полуфинал",
+            "Dead Space remake gets a surprise sequel teaser",
+            "Star Wars: Andor creator returns for a new series",
+            "God of War studio teases its next big project",
+            "Dying Light: The Beast adds a co-op horde mode",
+            "Death Stranding 2 lands on PC next spring",
+            "Gifted teen striker signs a new five-year deal",
+            "Trumpet player joins the London Symphony Orchestra",
+            "Ari Aster starts shooting his new horror film",
+            "Saka injury update: Arsenal winger back in training",
+            "Carolina Hurricanes extend their winning streak to seven",
+            "Nvidia agrees to buy a chip startup for $2bn",
+            "Promoted side stun the champions at Anfield",
+            "National Gallery reopens its Renaissance wing",
         ] {
             assert!(!heavy(t), "зря выкинули: {t}");
             assert!(!junk(t), "зря выкинули как мусор: {t}");
@@ -165,6 +217,15 @@ mod tests {
             "Лазер-шоу «Три дебила». Выпуск 750: всё о новинках",
             "От подкладов до бегемотов: тест на знание магических верований",
             "Ветеринар раскрыла указывающий на деменцию у кошки симптом",
+            "PS5 hits its lowest price ever for Black Friday",
+            "Everything we know about the next Zelda so far",
+            "How to watch the Champions League final online",
+            "Premier League best bets and betting tips for the weekend",
+            "Wordle today: hints and the answer for November 6",
+            "Severance season 2 ending explained, scene by scene",
+            "The best mechanical keyboards for every budget",
+            "Digital Arts MFA Program Now Accepting Applications",
+            "10 new albums you should listen to now",
         ] {
             assert!(junk(t), "пропустили мусор: {t}");
         }
@@ -180,18 +241,32 @@ mod tests {
 
     #[test]
     fn general_feed_words() {
-        let space = topic_words("космос");
+        let space = topic_words("космос", "ru");
         assert!(fits("Самая сильная за месяц вспышка произошла на Солнце", space));
         assert!(fits("Европа запустит ракету к Марсу в 2029 году", space));
         assert!(!fits("Назван простой способ ускорить похудение", space));
-        let pets = topic_words("животные");
+        let pets = topic_words("животные", "ru");
         assert!(fits("Наблюдавшие за дракой мыши уходили готовыми к бою", pets));
         assert!(fits("Ёжик и кот подружились в приюте", pets));
         assert!(!fits("Китай построит новую обсерваторию", pets), "кит — не Китай");
         assert!(!fits("Мышцы растут быстрее после сна", pets), "мышь — не мышца");
-        let tv = topic_words("сериалы");
+        let tv = topic_words("сериалы", "ru");
         assert!(fits("Стартовали съёмки сериала о подвиге ополчения", tv));
         assert!(fits("Второй сезон «Одни из нас» получил дату", tv));
         assert!(!fits("Ари Астер начал съёмки «Козла отпущения»", tv));
+    }
+
+    #[test]
+    fn english_feed_words() {
+        let esports = topic_words("киберспорт", "en");
+        assert!(fits("NaVi win IEM Cologne after a five-map final", esports));
+        assert!(fits("Valorant Champions: Sentinels lock in their roster", esports));
+        assert!(!fits("Twitch streamer reacts to the new iPhone", esports));
+        let pets = topic_words("животные", "en");
+        assert!(fits("Humpback whales sing in new dialects, study finds", pets));
+        assert!(fits("Why cats knead: researchers have an answer", pets));
+        assert!(!fits("New drug reverses memory loss in mice", pets), "опыты на мышах — не про зверей");
+        assert!(!fits("Catalyst turns plastic waste into fuel", pets), "cat — не catalyst");
+        assert!(topic_words("космос", "en").is_empty(), "у английского космоса нет общих лент");
     }
 }

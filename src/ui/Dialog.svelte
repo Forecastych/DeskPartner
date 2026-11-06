@@ -3,6 +3,7 @@
   // прокручиваемое содержимое и кнопки внизу. Передан onsubmit — корнем станет <form>.
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import type { Snippet } from 'svelte';
+  import { t } from '../lib/i18n';
   import Icon from './Icon.svelte';
 
   interface Props {
@@ -39,11 +40,11 @@
     <span class="paw"><Icon name="paw" /></span>
     <span class="title">{title}</span>
     {#if minimizable}
-      <button type="button" class="ctl" aria-label="Свернуть" title="Свернуть" onclick={minimize}>
+      <button type="button" class="ctl" aria-label={t('Свернуть', 'Minimize')} title={t('Свернуть', 'Minimize')} onclick={minimize}>
         <Icon name="minimize" />
       </button>
     {/if}
-    <button type="button" class="ctl close" aria-label="Закрыть" title="Закрыть" onclick={close}>
+    <button type="button" class="ctl close" aria-label={t('Закрыть', 'Close')} title={t('Закрыть', 'Close')} onclick={close}>
       <Icon name="close" />
     </button>
   </div>

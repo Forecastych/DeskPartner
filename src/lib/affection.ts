@@ -2,6 +2,7 @@
 // поднимают, побег от голода, месть и побудки опускают. Рост замедляется к сотне: первые
 // кормёжки дают много, дальше — понемногу, чтобы «обожает» надо было заслужить.
 
+import { t } from './i18n';
 import type { Stats } from './stats';
 
 const HOUR = 3_600_000;
@@ -40,9 +41,9 @@ export function level(s: Stats): number {
 
 /** Словами: для подписи под шкалой. */
 export function word(n: number): string {
-  if (n < 15) return 'присматривается';
-  if (n < 40) return 'привыкает';
-  if (n < 65) return 'доверяет';
-  if (n < 90) return 'обожает';
-  return 'жить без тебя не может';
+  if (n < 15) return t('присматривается', 'sizing you up');
+  if (n < 40) return t('привыкает', 'getting used to you');
+  if (n < 65) return t('доверяет', 'trusts you');
+  if (n < 90) return t('обожает', 'adores you');
+  return t('жить без тебя не может', "can't live without you");
 }

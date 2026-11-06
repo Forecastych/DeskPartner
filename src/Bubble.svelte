@@ -9,6 +9,7 @@
   import { emitTo } from '@tauri-apps/api/event';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { onMount, tick } from 'svelte';
+  import { t } from './lib/i18n';
   import { Icon } from './ui';
   import './ui/tokens.css';
 
@@ -97,11 +98,11 @@
     {text}
     {#if vote}
       <div class="votes">
-        <button class="vote ui-px" type="button" title="Интересно — давай больше такого" onpointerdown={(e) => voted(e, true)}>
-          <span class="up"><Icon name="heart" /></span>Ещё
+        <button class="vote ui-px" type="button" title={t('Интересно — давай больше такого', 'Interesting, more like this')} onpointerdown={(e) => voted(e, true)}>
+          <span class="up"><Icon name="heart" /></span>{t('Ещё', 'More')}
         </button>
-        <button class="vote ui-px" type="button" title="Неинтересно — меньше такого" onpointerdown={(e) => voted(e, false)}>
-          <span class="down"><Icon name="broken" /></span>Мимо
+        <button class="vote ui-px" type="button" title={t('Неинтересно — меньше такого', 'Not interesting, less like this')} onpointerdown={(e) => voted(e, false)}>
+          <span class="down"><Icon name="broken" /></span>{t('Мимо', 'Skip')}
         </button>
       </div>
     {/if}

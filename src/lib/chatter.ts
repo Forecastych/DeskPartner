@@ -11,6 +11,7 @@
 // и то реже. Погладили вскоре после факта — тема в почёте, отмахнулись — звучит реже.
 
 import { FACTS } from './facts';
+import { pick, type Lang } from './i18n';
 import type { Chatter, Topic } from './settings';
 
 const MIN = 60_000;
@@ -103,15 +104,42 @@ export interface Line {
   text: string;
 }
 
-const HUNGRY = ['Мяу… Миска пустая.', 'Есть хочу. Клик по миске?'];
-const WORK = ['Ты молодец.', 'Я тут, рядом.', 'Хорошо работаем.', 'Мур. Не отвлекаю.', '{name} на посту.'];
-const REST = ['Мур.', 'Хорошо сидим.', 'Погладишь?', 'А я бы вздремнула.', 'Мяу!', 'Ничего не происходит. Красота.', 'Мяу! Это я, {name}.'];
-const TODAY = 'Сегодня мы за компом уже {today}.';
-const CARE = 'Уже {session} без перерыва. Потянемся?';
-const PRAISE = '{session} в фокусе. Ты молодец.';
-const MORNING = 'Доброе утро!';
-const NIGHT = 'Уже {time}. Может, спать?';
-const FRIDAY = 'Пятница! Маленькая вечеринка?';
+interface Lines {
+  hungry: readonly string[];
+  work: readonly string[];
+  rest: readonly string[];
+  today: string;
+  care: string;
+  praise: string;
+  morning: string;
+  night: string;
+  friday: string;
+}
+
+const LINES: Record<Lang, Lines> = {
+  ru: {
+    hungry: ['Мяу… Миска пустая.', 'Есть хочу. Клик по миске?'],
+    work: ['Ты молодец.', 'Я тут, рядом.', 'Хорошо работаем.', 'Мур. Не отвлекаю.', '{name} на посту.'],
+    rest: ['Мур.', 'Хорошо сидим.', 'Погладишь?', 'А я бы вздремнула.', 'Мяу!', 'Ничего не происходит. Красота.', 'Мяу! Это я, {name}.'],
+    today: 'Сегодня мы за компом уже {today}.',
+    care: 'Уже {session} без перерыва. Потянемся?',
+    praise: '{session} в фокусе. Ты молодец.',
+    morning: 'Доброе утро!',
+    night: 'Уже {time}. Может, спать?',
+    friday: 'Пятница! Маленькая вечеринка?',
+  },
+  en: {
+    hungry: ['Meow… The bowl is empty.', "I'm hungry. Click the bowl?"],
+    work: ["You're doing great.", "I'm right here.", 'Good work, team.', "Purr. Won't distract you.", '{name} on duty.'],
+    rest: ['Purr.', 'Nice and cozy.', 'Pet me?', 'I could use a nap.', 'Meow!', 'Nothing is happening. Lovely.', "Meow! It's me, {name}."],
+    today: "We've been at the computer for {today} today.",
+    care: '{session} without a break. Time to stretch?',
+    praise: '{session} of focus. Well done.',
+    morning: 'Good morning!',
+    night: "It's {time} already. Bedtime, maybe?",
+    friday: "It's Friday! Tiny party?",
+  },
+};
 
 export function fresh(now: number, level: Chatter, rand: () => number): Talk {
   return {
@@ -154,12 +182,13 @@ export function dayKey(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-/** «2 ч 15 мин», «40 мин», «3 ч». */
+/** «2 ч 15 мин», «40 мин», «3 ч»; по-английски — «2 h 15 min». */
 export function duration(secs: number): string {
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
-  if (!h) return `${m} мин`;
-  return m ? `${h} ч ${m} мин` : `${h} ч`;
+  const [hh, mm] = pick({ ru: ['ч', 'мин'], en: ['h', 'min'] });
+  if (!h) return `${m} ${mm}`;
+  return m ? `${h} ${hh} ${m} ${mm}` : `${h} ${hh}`;
 }
 
 function fill(text: string, m: Moment): string {
@@ -187,16 +216,18 @@ function daily(t: Talk, d: Date): Line | null {
   const today = dayKey(d);
   const h = d.getHours();
   const due = (key: string) => t.daily[key] !== today;
-  if (h >= 5 && h < 11 && due('morning')) return { key: 'morning', text: MORNING };
-  if (h < 4 && due('night')) return { key: 'night', text: NIGHT };
-  if (d.getDay() === 5 && h >= 18 && due('friday')) return { key: 'friday', text: FRIDAY };
+  const l = pick(LINES);
+  if (h >= 5 && h < 11 && due('morning')) return { key: 'morning', text: l.morning };
+  if (h < 4 && due('night')) return { key: 'night', text: l.night };
+  if (d.getDay() === 5 && h >= 18 && due('friday')) return { key: 'friday', text: l.friday };
   return null;
 }
 
 /** Все факты темы: свежие из сети — первыми. */
 function factsOf(topic: Topic, m: Moment): readonly string[] {
   const extra = m.extra?.[topic] ?? [];
-  return extra.length ? [...extra, ...FACTS[topic]] : FACTS[topic];
+  const own = pick(FACTS)[topic];
+  return extra.length ? [...extra, ...own] : own;
 }
 
 /**
@@ -245,18 +276,19 @@ export function say(talk: Talk, m: Moment, level: Chatter, rand: () => number): 
 
   let line: Line | null = null;
   let told: string[] | null = null;
+  const l = pick(LINES);
   if (m.hungry && now - t.hungryAt >= HUNGRY_EVERY_MS) {
-    line = { key: 'hungry', text: any(HUNGRY, t.last, rand) };
+    line = { key: 'hungry', text: any(l.hungry, t.last, rand) };
   } else if (level !== 'quiet') {
     const once = (key: string) => !t.inSession.includes(key);
-    if (m.session >= CARE_SECS && once('care')) line = { key: 'care', text: CARE };
-    else if (m.session >= PRAISE_SECS && isWork(m.now) && once('praise')) line = { key: 'praise', text: PRAISE };
+    if (m.session >= CARE_SECS && once('care')) line = { key: 'care', text: l.care };
+    else if (m.session >= PRAISE_SECS && isWork(m.now) && once('praise')) line = { key: 'praise', text: l.praise };
     else if (now >= t.next) {
       line = daily(t, m.now);
       const f = line ? null : fact(t, m, rand);
       if (f) [line, told] = f;
-      if (!line && m.today >= 3600 && rand() < 0.2) line = { key: 'today', text: TODAY };
-      line ??= { key: isWork(m.now) ? 'work' : 'rest', text: any(named(isWork(m.now) ? WORK : REST, m), t.last, rand) };
+      if (!line && m.today >= 3600 && rand() < 0.2) line = { key: 'today', text: l.today };
+      line ??= { key: isWork(m.now) ? 'work' : 'rest', text: any(named(isWork(m.now) ? l.work : l.rest, m), t.last, rand) };
     }
   }
   if (!line) return [t, null];

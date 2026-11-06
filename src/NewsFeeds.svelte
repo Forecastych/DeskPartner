@@ -4,7 +4,9 @@
   // пока окно открыто: так видно, как ленты новой темы скачались сразу после галочки.
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
-  import { feedState, newsStatus, newsSummary, type NewsStatus } from './lib/news';
+  import { t } from './lib/i18n';
+  import { feedState, langMark, newsStatus, newsSummary, type NewsStatus } from './lib/news';
+  import { topicName, type Topic } from './lib/settings';
   import { Button, Hint } from './ui';
 
   /** Как часто переспрашивать статус. */
@@ -43,23 +45,26 @@
 </script>
 
 {#if failed && !status}
-  <Hint tone="error">Не удалось узнать, как дела у лент.</Hint>
+  <Hint tone="error">{t('Не удалось узнать, как дела у лент.', "Couldn't check on the feeds.")}</Hint>
 {:else if status}
   <p>{newsSummary(status)}</p>
   {#if status.feeds.length}
     <ul class="feeds">
       {#each status.feeds as f (f.source + f.topics.join())}
         <li>
-          <span class="name">{f.source}{f.lang === 'en' ? ' (англ.)' : ''}</span>
-          <span class="topics">— {f.topics.join(', ')}</span>
+          <span class="name">{f.source}{langMark(f.lang)}</span>
+          <span class="topics">· {f.topics.map((x) => topicName(x as Topic)).join(', ')}</span>
           <span class="state" class:bad={f.ok === false}>{feedState(f, status.now, status.busy)}</span>
         </li>
       {/each}
     </ul>
     <Hint>
-      Под новостью в облачке есть «Ещё» и «Мимо»: тема и источник будут попадаться чаще или реже.
+      {t(
+        'Под новостью в облачке есть «Ещё» и «Мимо»: тема и источник будут попадаться чаще или реже.',
+        'Under each story in the bubble there are "More" and "Skip": the topic and source will show up more or less often.',
+      )}
     </Hint>
-    <Button onclick={refresh} disabled={status.busy}>{status.busy ? 'Обновляются…' : 'Обновить сейчас'}</Button>
+    <Button onclick={refresh} disabled={status.busy}>{status.busy ? t('Обновляются…', 'Updating…') : t('Обновить сейчас', 'Update now')}</Button>
   {/if}
 {/if}
 

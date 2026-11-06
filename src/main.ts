@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { mount, type Component } from 'svelte';
 import './app.css';
@@ -13,6 +14,7 @@ import Push from './Push.svelte';
 import Settings from './Settings.svelte';
 import Setup from './Setup.svelte';
 import Stats from './Stats.svelte';
+import { setLang } from './lib/i18n';
 
 // Все окна грузят одну страницу, а что в нём жить — решает метка окна, которую дал Rust.
 const views: Record<string, Component> = {
@@ -30,4 +32,11 @@ const views: Record<string, Component> = {
   puddle: Puddle,
 };
 
-export default mount(views[getCurrentWindow().label] ?? App, { target: document.getElementById('app')! });
+// Язык решает Rust (настройка или язык Windows) — узнаём его до первой отрисовки, чтобы окно
+// не мигнуло русским. Не ответил — русский, как было до перевода.
+export default invoke<string>('lang')
+  .catch(() => 'ru')
+  .then((l) => {
+    setLang(l);
+    return mount(views[getCurrentWindow().label] ?? App, { target: document.getElementById('app')! });
+  });

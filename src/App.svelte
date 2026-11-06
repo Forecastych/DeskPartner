@@ -21,6 +21,7 @@
   import { ANIMS, BOWL_X, bowlLeft, draw, dress, fatOn, flip, ground, hitMask, onBowl, SCRUFF_AT, SIZE, type AnimName, type Frame } from './lib/sprite';
   import { localLegacy, memoryStore, open, tauriBackend, type Store } from './lib/store';
   import * as wiki from './lib/wiki';
+  import { count, t } from './lib/i18n';
 
   const PETTED_MS = 1500;
   /** Поза отдыха держится от 2 до 5 минут, потом кошка может перелечь. */
@@ -982,10 +983,10 @@
       forced = true;
       speak(text, Date.now(), about);
     };
-    if (!topics.length) return show('Тем не выбрано — новостей не будет.');
+    if (!topics.length) return show(t('Тем не выбрано — новостей не будет.', 'No topics chosen, so no news.'));
     news.pickNews(invoke, topics, talk.weights).then((item) => {
       const topic = TOPICS.find((t) => t === item?.topic);
-      if (!item || !topic) return show('Новостей пока нет: ленты ещё качаются.');
+      if (!item || !topic) return show(t('Новостей пока нет: ленты ещё качаются.', 'No news yet: the feeds are still downloading.'));
       show(news.newsLine(item), { topic, source: item.source });
     });
   }
@@ -1137,7 +1138,7 @@
         if (m) pet = { ...pet, facing: pet.x < (m.rect.left + m.rect.right) / 2 ? 1 : -1 };
         if (peekPending) {
           peekPending = false;
-          speak('А? Что я пропустила?', now);
+          speak(t('А? Что я пропустила?', 'Huh? What did I miss?'), now);
         }
       }
       if (event === 'arrived' && groomOnArrival) {
@@ -1306,20 +1307,25 @@
     const items = [
       // шапка с именем: назвали — ведёт в статистику, нет — в настройки, где имя и дают
       s.name
-        ? { id: 'about', text: s.name, hint: `знакомы ${known} ${tally.plural(known, ['день', 'дня', 'дней'])}` }
-        : { id: 'about', text: 'Без имени', hint: 'назвать — в настройках' },
+        ? { id: 'about', text: s.name, hint: t(`знакомы ${count(known, ['день', 'дня', 'дней'], ['day', 'days'])}`, `friends for ${count(known, ['день', 'дня', 'дней'], ['day', 'days'])}`) }
+        : { id: 'about', text: t('Без имени', 'No name'), hint: t('назвать — в настройках', 'name her in settings') },
       { separator: true },
-      { id: 'feeder', text: 'Кормушка', checked: s.feeder, hint: s.feeder ? 'клик по миске — про запас' : 'клик по миске — покормить сейчас' },
-      { id: 'bed', text: 'Лежак', checked: s.bed, hint: 'тащи мышью, как и миску' },
-      { id: 'hideFromCapture', text: 'Прятать от записи экрана', checked: s.hideFromCapture },
-      { id: 'laser', text: 'Лазерная указка', checked: dot !== null, hint: 'или зажать Ctrl; Esc — выключить' },
-      { id: 'hunter', text: 'Охотник', checked: s.hunter, hint: 'иногда пробегает мышь' },
+      {
+        id: 'feeder',
+        text: t('Кормушка', 'Feeder'),
+        checked: s.feeder,
+        hint: s.feeder ? t('клик по миске — про запас', 'click the bowl to stock up') : t('клик по миске — покормить сейчас', 'click the bowl to feed now'),
+      },
+      { id: 'bed', text: t('Лежак', 'Bed'), checked: s.bed, hint: t('тащи мышью, как и миску', 'drag it like the bowl') },
+      { id: 'hideFromCapture', text: t('Прятать от записи экрана', 'Hide from screen capture'), checked: s.hideFromCapture },
+      { id: 'laser', text: t('Лазерная указка', 'Laser pointer'), checked: dot !== null, hint: t('или зажать Ctrl; Esc — выключить', 'or hold Ctrl; Esc turns it off') },
+      { id: 'hunter', text: t('Охотник', 'Hunter'), checked: s.hunter, hint: t('иногда пробегает мышь', 'a mouse runs by now and then') },
       // в меню нет радиокнопок: область — галочкой, снятая — панель задач
-      { id: 'hunterArea', text: 'Мышь по всему экрану', checked: s.hunterArea === 'screen', hint: 'иначе — по панели задач' },
-      { id: 'yarn', text: 'Клубок', checked: s.yarn, hint: 'раз в час-два катает по панели задач' },
+      { id: 'hunterArea', text: t('Мышь по всему экрану', 'Mouse on the whole screen'), checked: s.hunterArea === 'screen', hint: t('иначе — по панели задач', 'otherwise along the taskbar') },
+      { id: 'yarn', text: t('Клубок', 'Yarn'), checked: s.yarn, hint: t('раз в час-два катает по панели задач', 'rolls it along the taskbar every hour or two') },
       { separator: true },
-      { id: 'stats', text: 'Статистика…' },
-      { id: 'settings', text: 'Настройки…' },
+      { id: 'stats', text: t('Статистика…', 'Stats…') },
+      { id: 'settings', text: t('Настройки…', 'Settings…') },
     ];
     invoke('open_menu', { owner: 'pet', items }).catch(console.error);
   }

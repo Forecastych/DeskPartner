@@ -6,6 +6,7 @@
 //! фронтенд (src/lib/reviews.ts). Ответ, в том числе «не нашли», лежит в папке данных
 //! (`reviews.json`) месяц: оценки за это время почти не меняются, а сеть дёргать незачем.
 
+use crate::i18n::{self, tr};
 use crate::store;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -167,14 +168,19 @@ fn agent() -> ureq::Agent {
     ureq::Agent::config_builder().timeout_global(Some(TIMEOUT)).user_agent(USER_AGENT).build().into()
 }
 
+/// Сначала язык интерфейса, потом другой: и название, и раздел об отзывах лучше на своём.
+fn langs(en: bool) -> [&'static str; 2] {
+    if en { ["en", "ru"] } else { ["ru", "en"] }
+}
+
 fn get(agent: &ureq::Agent, url: &str, query: &[(&str, &str)]) -> Result<Value, String> {
-    let net = |e: ureq::Error| format!("Википедия недоступна: {e}");
+    let net = |e: ureq::Error| format!("{}: {e}", tr("Википедия недоступна", "Wikipedia is unreachable"));
     let mut req = agent.get(url);
     for (k, v) in query {
         req = req.query(*k, *v);
     }
     let body = req.call().map_err(net)?.body_mut().read_to_string().map_err(net)?;
-    serde_json::from_str(&body).map_err(|e| format!("Википедия ответила непонятно: {e}"))
+    serde_json::from_str(&body).map_err(|e| format!("{}: {e}", tr("Википедия ответила непонятно", "Wikipedia sent an odd answer")))
 }
 
 /// Раздел об отзывах из статьи `title` в `lang`-Википедии, если он там есть.
@@ -207,9 +213,10 @@ fn fetch(title: &str) -> Result<Option<Film>, String> {
         return Ok(None);
     }
     let agent = agent();
-    // плееры отдают и «Интерстеллар», и «Interstellar»: ищем по русским подписям, потом по английским
+    let langs = langs(i18n::en());
+    // плееры отдают и «Интерстеллар», и «Interstellar»: ищем по подписям на своём языке, потом на другом
     let mut found = None;
-    for lang in ["ru", "en"] {
+    for lang in langs {
         if let Some(hit) = search(&agent, &name, lang, year)? {
             found = Some(hit);
             break;
@@ -217,9 +224,9 @@ fn fetch(title: &str) -> Result<Option<Film>, String> {
     }
     let Some(entity) = found else { return Ok(None) };
     let entity = &entity;
-    let label = ["ru", "en"].iter().find_map(|l| entity["labels"][*l]["value"].as_str()).unwrap_or(&name).to_string();
+    let label = langs.iter().find_map(|l| entity["labels"][*l]["value"].as_str()).unwrap_or(&name).to_string();
     let mut film = Film { label, scores: scores(entity), lang: String::new(), reception: String::new() };
-    for lang in ["ru", "en"] {
+    for lang in langs {
         let Some(page) = entity["sitelinks"][format!("{lang}wiki")]["title"].as_str() else { continue };
         if let Some(text) = reception(&agent, lang, page)? {
             film.lang = lang.into();
@@ -230,8 +237,9 @@ fn fetch(title: &str) -> Result<Option<Film>, String> {
     Ok(Some(film))
 }
 
-fn key(title: &str) -> String {
-    title.trim().to_lowercase()
+/// Язык в ключе: тот же фильм в другом интерфейсе нужен с другим названием и разделом.
+fn key(lang: &str, title: &str) -> String {
+    format!("{lang}:{}", title.trim().to_lowercase())
 }
 
 /// Ответ из кэша, если он не старше месяца. `Some(None)` — уже искали и не нашли.
@@ -254,7 +262,7 @@ fn remember(dir: Option<&Path>, entry: Entry) {
 fn lookup(title: String) -> Result<Option<Film>, String> {
     let dir = store::data_dir().map(PathBuf::from);
     let now = chrono::Local::now().timestamp();
-    let key = key(&title);
+    let key = key(i18n::code(), &title);
     if let Some(film) = cached(dir.as_deref(), &key, now) {
         return Ok(film);
     }
@@ -370,6 +378,14 @@ mod tests {
         assert!(film.scores.len() >= 2, "{:?}", film.scores);
         assert_eq!(film.lang, "ru");
         assert!(!film.reception.is_empty() && !film.reception.contains("<ref"));
+    }
+
+    #[test]
+    fn native_language_goes_first() {
+        assert_eq!(langs(false), ["ru", "en"]);
+        assert_eq!(langs(true), ["en", "ru"]);
+        assert_eq!(key("en", "  Interstellar "), "en:interstellar");
+        assert_ne!(key("ru", "Interstellar"), key("en", "Interstellar"));
     }
 
     #[test]

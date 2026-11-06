@@ -4,6 +4,9 @@
 
 import * as affection from './affection';
 import * as chrono from './chrono';
+import { count, lang, t } from './i18n';
+
+export { plural } from './i18n';
 
 /** Время копится шагами кадра; больше этого за шаг не засчитываем — компьютер спал, а не мы вместе. */
 export const MAX_STEP_MS = 60_000;
@@ -96,28 +99,20 @@ export function tick(s: Stats, ms: number, home: boolean, film: boolean, hour = 
   return n;
 }
 
-/** 1 раз, 2 раза, 5 раз, 11 раз, 21 раз. */
-export function plural(n: number, [one, few, many]: [string, string, string]): string {
-  const d = n % 10;
-  const h = n % 100;
-  if (d === 1 && h !== 11) return one;
-  if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return few;
-  return many;
-}
-
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 
-/** Коротко, две старшие единицы: «меньше минуты», «12 мин», «3 ч 5 мин», «2 дн 4 ч». */
+/** Коротко, две старшие единицы: «меньше минуты», «12 мин», «3 ч 5 мин», «2 дн 4 ч» (2d 4h). */
 export function duration(ms: number): string {
-  if (ms < MIN) return 'меньше минуты';
+  if (ms < MIN) return t('меньше минуты', 'under a minute');
   const d = Math.floor(ms / DAY);
   const h = Math.floor((ms % DAY) / HOUR);
   const m = Math.floor((ms % HOUR) / MIN);
-  if (d > 0) return h > 0 ? `${d} дн ${h} ч` : `${d} дн`;
-  if (h > 0) return m > 0 ? `${h} ч ${m} мин` : `${h} ч`;
-  return `${m} мин`;
+  const [dd, hh, mm] = t([' дн', ' ч', ' мин'], ['d', 'h', 'm']);
+  if (d > 0) return h > 0 ? `${d}${dd} ${h}${hh}` : `${d}${dd}`;
+  if (h > 0) return m > 0 ? `${h}${hh} ${m}${mm}` : `${h}${hh}`;
+  return `${m}${mm}`;
 }
 
 /** Сколько календарных дней прошло, считая первый: в день знакомства — 1. */
@@ -130,10 +125,12 @@ export function days(since: number, now: number): number {
 }
 
 const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-/** «6 ноября 2026»: без Intl, чтобы не зависеть от локали WebView. */
+/** «6 ноября 2026» / «November 6, 2026»: без Intl, чтобы не зависеть от локали WebView. */
 export function date(ms: number): string {
   const d = new Date(ms);
+  if (lang() === 'en') return `${MONTHS_EN[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
@@ -151,58 +148,60 @@ export interface Group {
   rows: Row[];
 }
 
-const TIMES: [string, string, string] = ['раз', 'раза', 'раз'];
-
 function times(n: number): string {
-  return `${n} ${plural(n, TIMES)}`;
+  return count(n, ['раз', 'раза', 'раз'], ['time', 'times']);
 }
 
-/** Готовые строки для окна: разделы, подписи и цифры уже по-русски. */
+/** Готовые строки для окна: разделы, подписи и цифры уже на языке интерфейса. */
 export function groups(s: Stats, now: number): Group[] {
   const n = days(s.since, now);
-  const caught = s.mice > 0 ? `поймана ${s.caught} из ${s.mice}` : undefined;
+  const caught = s.mice > 0 ? t(`поймана ${s.caught} из ${s.mice}`, `caught ${s.caught} of ${s.mice}`) : undefined;
   const love = affection.level(s);
   return [
     {
-      title: 'Вместе',
+      title: t('Вместе', 'Together'),
       rows: [
-        { label: 'Знакомы', value: `${n} ${plural(n, ['день', 'дня', 'дней'])}`, hint: `с ${date(s.since)}` },
-        { label: 'Привязанность', value: `${love} из 100`, hint: affection.word(love), meter: love / 100 },
-        { label: 'Рядом на экране', value: duration(s.together) },
-        { label: 'Кино вместе', value: `${s.films} ${plural(s.films, ['фильм', 'фильма', 'фильмов'])}`, hint: s.filmMs > 0 ? duration(s.filmMs) : undefined },
+        { label: t('Знакомы', 'Friends for'), value: count(n, ['день', 'дня', 'дней'], ['day', 'days']), hint: t(`с ${date(s.since)}`, `since ${date(s.since)}`) },
+        { label: t('Привязанность', 'Affection'), value: t(`${love} из 100`, `${love} of 100`), hint: affection.word(love), meter: love / 100 },
+        { label: t('Рядом на экране', 'On screen together'), value: duration(s.together) },
+        {
+          label: t('Кино вместе', 'Movies together'),
+          value: count(s.films, ['фильм', 'фильма', 'фильмов'], ['movie', 'movies']),
+          hint: s.filmMs > 0 ? duration(s.filmMs) : undefined,
+        },
       ],
     },
     {
-      title: 'Забота',
+      title: t('Забота', 'Care'),
       rows: [
-        { label: 'Покормили', value: times(s.fed) },
-        { label: 'Погладили', value: times(s.petted) },
-        { label: 'Носили на руках', value: times(s.carried) },
+        { label: t('Покормили', 'Fed'), value: times(s.fed) },
+        { label: t('Погладили', 'Petted'), value: times(s.petted) },
+        { label: t('Носили на руках', 'Carried'), value: times(s.carried) },
       ],
     },
     {
-      title: 'Сон',
+      title: t('Сон', 'Sleep'),
       rows: [
-        { label: 'Уснула', value: times(s.naps) },
-        { label: 'Разбудили', value: times(s.woken) },
+        { label: t('Уснула', 'Naps'), value: times(s.naps) },
+        { label: t('Разбудили', 'Woken up'), value: times(s.woken) },
       ],
     },
     {
-      title: 'Игры',
+      title: t('Игры', 'Games'),
       rows: [
-        { label: 'Мыши', value: `${s.mice}`, hint: caught },
-        { label: 'Клубки', value: `${s.yarns}` },
-        { label: 'Лазерная указка', value: times(s.lasers) },
+        { label: t('Мыши', 'Mice'), value: `${s.mice}`, hint: caught },
+        { label: t('Клубки', 'Yarn balls'), value: `${s.yarns}` },
+        { label: t('Лазерная указка', 'Laser pointer'), value: times(s.lasers) },
       ],
     },
     {
-      title: 'Характер',
+      title: t('Характер', 'Character'),
       rows: [
-        { label: 'Режим дня', ...chrono.describe(chrono.kind(s.hours)) },
-        { label: 'Мстила', value: times(s.revenges), hint: s.puddles > 0 ? `луж: ${s.puddles}` : undefined },
-        { label: 'Пряталась от созвонов', value: times(s.calls) },
-        { label: 'Облачков с мыслями', value: `${s.said}` },
-        { label: 'Сбежала от голода', value: times(s.runaways) },
+        { label: t('Режим дня', 'Daily rhythm'), ...chrono.describe(chrono.kind(s.hours)) },
+        { label: t('Мстила', 'Took revenge'), value: times(s.revenges), hint: s.puddles > 0 ? t(`луж: ${s.puddles}`, `puddles: ${s.puddles}`) : undefined },
+        { label: t('Пряталась от созвонов', 'Hid from calls'), value: times(s.calls) },
+        { label: t('Облачков с мыслями', 'Thought bubbles'), value: `${s.said}` },
+        { label: t('Сбежала от голода', 'Ran away hungry'), value: times(s.runaways) },
       ],
     },
   ];

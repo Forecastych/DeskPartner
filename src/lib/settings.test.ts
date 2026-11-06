@@ -52,7 +52,7 @@ describe('настройки', () => {
   it('«Другое» предлагает имя из списка и не то же самое', () => {
     for (let i = 0; i < 20; i++) {
       const n = suggestName(() => i / 20, 'Мурка');
-      expect(NAMES).toContain(n);
+      expect(NAMES.ru).toContain(n);
       expect(n).not.toBe('Мурка');
     }
   });
