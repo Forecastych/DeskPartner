@@ -18,6 +18,7 @@ mod reviews;
 mod shake;
 mod store;
 mod tracker;
+mod update;
 #[cfg(windows)]
 mod win;
 mod wiki;
@@ -390,6 +391,10 @@ fn tray_items() -> Vec<menu::Item> {
         // некормленый кот уходит навсегда — без этого пункта вернуть питомца было бы нечем
         entry("adopt", tr("Новый котик", "Adopt a new cat"), Some(tr("если прежний сбежал", "if the last one ran away"))),
     ]);
+    if let Some(v) = update::version() {
+        // ставим по клику: окно кошки сначала допишет всё на диск
+        items.push(entry("update", &format!("{} {v}", tr("Обновить до", "Update to")), Some(tr("перезапустится сама", "restarts by itself"))));
+    }
     #[cfg(windows)]
     items.push(if win::bossed() {
         entry("boss", tr("Показать питомца", "Show your pet"), Some("Ctrl+Alt+H"))
@@ -409,6 +414,12 @@ fn tray_items() -> Vec<menu::Item> {
 /// Выбрали пункт в меню трея (menu.rs зовёт сюда вместо события окну).
 pub(crate) fn tray_pick(app: &AppHandle, id: &str) {
     match id {
+        // ставить — через окно кошки: ему надо успеть дописать файлы
+        "update" => {
+            if let Err(err) = app.emit_to("pet", "update-install", ()) {
+                eprintln!("update: {err}");
+            }
+        }
         "call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn" | "dev-news" | "dev-revenge" => {
             if let Err(err) = app.emit_to("pet", id, ()) {
                 eprintln!("{id}: {err}");
@@ -469,6 +480,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
         // выбор папки данных в окне первого запуска
         .plugin(tauri_plugin_dialog::init())
+        // обновления из GitHub Releases (update.rs)
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Arc::new(Masks::default()))
         .manage(feel.clone())
         .invoke_handler(tauri::generate_handler![
@@ -512,6 +525,8 @@ pub fn run() {
             news::news_vote,
             news::news_status,
             news::news_refresh,
+            update::set_updates,
+            update::install_update,
         ])
         .setup(move |app| {
             // язык — до окон и трея: они строятся уже на нём
@@ -530,6 +545,7 @@ pub fn run() {
                 start_senses(feel, app.handle().clone());
             }
             news::start();
+            update::start(app.handle().clone());
             // снимаем сразу: следующий перезапуск (или программа, которую питомец запустит) её не унаследует
             let reopen = std::env::var_os(REOPEN_SETTINGS).is_some();
             std::env::remove_var(REOPEN_SETTINGS);

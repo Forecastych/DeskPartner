@@ -25,6 +25,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # «В этот день» из Википедии: маленький блокирующий клиент, TLS на rustls — без OpenSSL в установщике
 ureq = "3"
 quick-xml = "0.42"
+tauri-plugin-updater = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

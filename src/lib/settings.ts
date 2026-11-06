@@ -127,6 +127,8 @@ export interface Settings {
   reviews: boolean;
   /** Ключ TMDB вводит человек: свой ключ в открытый код не кладём. */
   tmdbKey: string;
+  /** Раз в несколько часов спрашивать GitHub, нет ли версии новее (src-tauri/src/update.rs). Ставит всё равно человек. */
+  updates: boolean;
 }
 
 export function defaults(): Settings {
@@ -148,6 +150,8 @@ export function defaults(): Settings {
     sites: false,
     reviews: false,
     tmdbKey: '',
+    // без обновлений исправления до людей не доедут; спрашиваем только версию, ставим по клику
+    updates: true,
   };
 }
 
@@ -186,6 +190,7 @@ export function parse(raw: string | null): Settings {
     sites: bool(s.sites, d.sites),
     reviews: bool(s.reviews, d.reviews),
     tmdbKey: typeof s.tmdbKey === 'string' ? s.tmdbKey.trim() : d.tmdbKey,
+    updates: bool(s.updates, d.updates),
   };
 }
 

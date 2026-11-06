@@ -213,6 +213,8 @@
   let filmTitle = '';
   let filmVerdict: Verdict = 'unknown';
   let reviewsOn = false;
+  /** Версия, до которой можно обновиться (update.rs), или null. */
+  let updateTo: string | null = null;
   /** Вердикты по названию: один фильм — один запрос за жизнь программы (Rust ещё и кэширует на диске). */
   const verdicts = new Map<string, Verdict>();
   /** За краем она спит от скуки на фильме, а не в обиде: громкая сцена может её позвать. */
@@ -1278,6 +1280,7 @@
     if (s.name !== petName) invoke('name_pet', { name: s.name }).catch(console.error);
     petName = s.name;
     reviewsOn = s.reviews;
+    tellUpdates(s.updates);
     // ленты новых тем качаются сразу, а не когда кошка соберётся рассказать
     invoke('news_topics', { topics: [...topics] }).catch(console.error);
     if (s.chatter !== chatterLevel) {
@@ -1287,6 +1290,31 @@
     invoke('set_capture_hidden', { hidden: s.hideFromCapture }).catch(console.error);
     tellBowl();
     tellBed();
+  }
+
+  /** Галочка «проверять обновления» — в update.rs; в ответ уже найденная версия, если есть. */
+  function tellUpdates(on: boolean) {
+    invoke<string | null>('set_updates', { on })
+      .then((v) => {
+        if (v) updateTo = v;
+      })
+      .catch(console.error);
+  }
+
+  /**
+   * Поставить обновление (пункт в меню кошки или в трее): дописать всё на диск, как перед переносом
+   * папки, и отдать Rust. Установщик закроет программу и сам откроет новую версию.
+   */
+  async function installUpdate() {
+    if (frozen || !updateTo) return;
+    persist(Date.now());
+    frozen = true;
+    await store.flush();
+    invoke('install_update').catch((e) => {
+      console.error(e);
+      frozen = false;
+      speak(t('Обновиться не вышло, попробуй позже.', "The update didn't work, try again later."), Date.now());
+    });
   }
 
   /** Галочка в ПКМ-меню: сохранить, применить и показать открытому окну настроек. */
@@ -1310,6 +1338,9 @@
         ? { id: 'about', text: s.name, hint: t(`знакомы ${count(known, ['день', 'дня', 'дней'], ['day', 'days'])}`, `friends for ${count(known, ['день', 'дня', 'дней'], ['day', 'days'])}`) }
         : { id: 'about', text: t('Без имени', 'No name'), hint: t('назвать — в настройках', 'name her in settings') },
       { separator: true },
+      ...(updateTo
+        ? [{ id: 'update', text: t(`Обновить до ${updateTo}`, `Update to ${updateTo}`), hint: t('перезапустится сама', 'restarts by itself') }, { separator: true }]
+        : []),
       {
         id: 'feeder',
         text: t('Кормушка', 'Feeder'),
@@ -1335,6 +1366,7 @@
     else if (id === 'laser') invoke('set_laser', { on: dot === null }).catch(console.error);
     else if (id === 'settings') invoke('open_settings').catch(console.error);
     else if (id === 'stats') invoke('open_stats').catch(console.error);
+    else if (id === 'update') installUpdate();
     else if (id === 'about') invoke(petName ? 'open_stats' : 'open_settings').catch(console.error);
   }
 
@@ -1402,6 +1434,7 @@
       chatterLevel = settings.chatter;
       topics = settings.topics;
       reviewsOn = settings.reviews;
+      tellUpdates(settings.updates);
       hunterOn = settings.hunter;
       hunterArea = settings.hunterArea;
       nextHunt = Date.now() + huntGap();
@@ -1490,6 +1523,11 @@
       grudge = revenge.dare(grudge, Date.now());
       revengeNow = true;
     });
+    // нашлась версия новее (update.rs): пункт в меню; ставить зовут и из трея
+    const unupdate = listen<string>('update', (e) => {
+      updateTo = e.payload;
+    });
+    const uninstall = listen('update-install', installUpdate);
     // окно настроек уже сохранило файл; кеш обновляем, чтобы следующая галочка в меню не затёрла его старьём
     // Слушаем своим окном: глобальный listen поймал бы и наш же emitTo('settings', 'settings').
     const win = getCurrentWebviewWindow();
@@ -1564,7 +1602,7 @@
       clearTimeout(timer);
       clearInterval(moving);
       clearInterval(id);
-      const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn, unnews, unrevenge];
+      const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn, unnews, unrevenge, unupdate, uninstall];
       for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, unstats, undrag, unlaser, unlaserOff, unshoo, unvote, unboss, unshot, uncrunch]) off.then((f) => f());
     };
   });

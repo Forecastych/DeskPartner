@@ -40,6 +40,8 @@ Works on Windows 10 and 11.
 > [!WARNING]
 > **Windows SmartScreen will warn you about the installer.** The installer is not code-signed: a code signing certificate costs money every year, and this is a free hobby project. To install anyway, click **More info → Run anyway**. If you would rather not trust a binary, [build it from source](#build-from-source), it takes a few commands.
 
+**Updates.** Every few hours she asks GitHub whether a new version is out. If there is one, "Update to …" appears in her menu and in the tray; it installs only when you click it, then the app restarts. The installer is checked against a signing key, so a tampered file is refused. You can turn the check off in Settings.
+
 To uninstall, use "Installed apps" in Windows Settings. Your data folder stays where you put it; delete it by hand if you want it gone.
 
 ## Controls
@@ -60,6 +62,7 @@ To uninstall, use "Installed apps" in Windows Settings. Your data folder stays w
 - **Microphone and camera are not recorded.** She only checks whether they are busy, to know you are on a call.
 - **The screen is not saved.** For the laser she looks at a few pixels in memory, nothing is stored or sent.
 - **What goes over the network, and only when the feature is on:**
+  - update check: a request to GitHub Releases for the latest version number (on by default, off in Settings);
   - "This day in history" from Wikipedia: today's date and the language;
   - news headlines: RSS feeds of the topics you picked (The Guardian, BBC and others);
   - film reviews: the film title goes to Wikidata and Wikipedia;
