@@ -2,9 +2,9 @@
 const CONFIG = {
   // Владелец/имя репозитория на GitHub. ПРЕДПОЛОЖЕНИЕ: поправить, когда репозиторий появится.
   REPO: 'Forecastych/DeskPartner',
-  // Ссылка на Google Форму отзывов, вида https://docs.google.com/forms/d/e/.../viewform?embedded=true
-  // Пока пусто – на странице заглушка «форма скоро появится». Как получить ссылку – docs/FORM.md.
-  FORM_URL: '',
+  // Google Форма отзывов «DeskPartner feedback». Пустая строка – на странице заглушка
+  // «форма скоро появится». Как получить ссылку – docs/FORM.md.
+  FORM_URL: 'https://docs.google.com/forms/d/e/1FAIpQLScPQ4Ev1Kb2O0BNKfnxvDiSIq8gd5M6oQsoTsA054a6erONsA/viewform?embedded=true',
 };
 
 const gh = `https://github.com/${CONFIG.REPO}`;
