@@ -21,6 +21,13 @@ pub struct Rect {
     pub bottom: i32,
 }
 
+/// Точка в физических пикселях рабочего стола.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Monitor {
@@ -58,6 +65,8 @@ pub struct World {
     /// Полосы заголовков развёрнутых окон левее кнопок «свернуть/развернуть/закрыть»,
     /// по z-order сверху вниз; у каждого окна не больше одной.
     pub strips: Vec<Ledge>,
+    /// Где курсор: монитор, куда человек давно не заглядывал, кошка считает выключенным.
+    pub cursor: Option<Point>,
 }
 
 /// Окно, которое закрывает то, что под ним. Список таких окон идёт сверху вниз по z-order.
@@ -224,7 +233,7 @@ pub fn world() -> World {
     // активное считаем, только если оно среди помех: так отсеиваются свои, свёрнутые и спрятанные
     let active = sys::active().filter(|&h| windows.iter().any(|w| w.hwnd == h));
     let monitors = fullscreen(sys::monitors(), &windows);
-    World { monitors, ledges: ledges(&windows), active, strips: strips(&windows) }
+    World { monitors, ledges: ledges(&windows), active, strips: strips(&windows), cursor: sys::cursor() }
 }
 
 /// Внутренние рамки окон для погони за мышью (см. [`shelves_of`]). Только прямоугольники
@@ -270,18 +279,18 @@ pub fn place_pet(window: WebviewWindow, x: i32, bottom: i32) -> Result<(), Strin
 
 #[cfg(windows)]
 mod sys {
-    use super::{Child, Monitor, Rect, Win};
+    use super::{Child, Monitor, Point, Rect, Win};
     use std::ffi::c_void;
     use std::mem::size_of;
     use std::ptr::{null, null_mut};
-    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
     use windows_sys::Win32::Graphics::Dwm::{
         DwmGetWindowAttribute, DWMWA_CAPTION_BUTTON_BOUNDS, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
     };
     use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
     use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumChildWindows, EnumWindows, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect,
+        EnumChildWindows, EnumWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect,
         GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER,
         MONITORINFOF_PRIMARY, SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_CHILD,
         WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
@@ -386,6 +395,12 @@ mod sys {
             .collect()
     }
 
+    pub fn cursor() -> Option<Point> {
+        let mut p = POINT { x: 0, y: 0 };
+        // SAFETY: пишет только в свою структуру
+        (unsafe { GetCursorPos(&mut p) } != 0).then_some(Point { x: p.x, y: p.y })
+    }
+
     /// Корень окна на переднем плане. Рабочий стол и панели задач — не «окно, где работают».
     pub fn active() -> Option<i64> {
         // SAFETY: только чтение по дескриптору; окно могло исчезнуть — тогда вызовы не удадутся
@@ -468,7 +483,7 @@ mod sys {
 
 #[cfg(not(windows))]
 mod sys {
-    use super::{Child, Monitor, Win};
+    use super::{Child, Monitor, Point, Win};
 
     pub fn monitors() -> Vec<Monitor> {
         Vec::new()
@@ -477,6 +492,9 @@ mod sys {
         Vec::new()
     }
     pub fn active() -> Option<i64> {
+        None
+    }
+    pub fn cursor() -> Option<Point> {
         None
     }
     pub fn children(_: i64) -> Vec<Child> {
@@ -702,15 +720,16 @@ mod tests {
             ledges: vec![Ledge { hwnd: 42, y: 200, left: 100, right: 300, frame: rect(100, 200, 500, 600) }],
             active: Some(7),
             strips: vec![Ledge { hwnd: 7, y: 0, left: 0, right: 1782, frame: MAX }],
+            cursor: Some(Point { x: 960, y: 540 }),
         };
         let json = serde_json::to_string(&w).unwrap();
         assert_eq!(
             json,
-            r#"{"monitors":[{"rect":{"left":0,"top":0,"right":1920,"bottom":1080},"work":{"left":0,"top":0,"right":1920,"bottom":1040},"scale":1.25,"primary":true}],"ledges":[{"hwnd":42,"y":200,"left":100,"right":300,"frame":{"left":100,"top":200,"right":500,"bottom":600}}],"active":7,"strips":[{"hwnd":7,"y":0,"left":0,"right":1782,"frame":{"left":0,"top":0,"right":1920,"bottom":1040}}]}"#
+            r#"{"monitors":[{"rect":{"left":0,"top":0,"right":1920,"bottom":1080},"work":{"left":0,"top":0,"right":1920,"bottom":1040},"scale":1.25,"primary":true}],"ledges":[{"hwnd":42,"y":200,"left":100,"right":300,"frame":{"left":100,"top":200,"right":500,"bottom":600}}],"active":7,"strips":[{"hwnd":7,"y":0,"left":0,"right":1782,"frame":{"left":0,"top":0,"right":1920,"bottom":1040}}],"cursor":{"x":960,"y":540}}"#
         );
         // без активного окна — null, а не пропуск ключа
         let json = serde_json::to_string(&World::default()).unwrap();
-        assert_eq!(json, r#"{"monitors":[],"ledges":[],"active":null,"strips":[]}"#);
+        assert_eq!(json, r#"{"monitors":[],"ledges":[],"active":null,"strips":[],"cursor":null}"#);
     }
 
     fn screen(rect: Rect, work: Rect) -> Monitor {

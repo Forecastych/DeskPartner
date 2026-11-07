@@ -35,6 +35,8 @@ export interface World {
   active?: number | null;
   /** Полосы заголовков развёрнутых окон левее кнопок «свернуть/закрыть»: только поспать. */
   strips?: Ledge[];
+  /** Курсор, физ. px: по нему видно, на какие мониторы человек смотрит. */
+  cursor?: { x: number; y: number } | null;
 }
 
 /** Сторона спрайта в логических px: 32 клетки × 4. */
@@ -680,13 +682,57 @@ const REST_FLOOR = 0.7;
 const REST_ACTIVE = 0.5;
 
 /**
+ * Сколько мс монитор без курсора остаётся жилым. Выключенный монитор Windows не убирает из
+ * раскладки, и кошка уходила на него спать — с глаз долой.
+ */
+export const UNSEEN_MS = 10 * 60_000;
+
+/** Ключ монитора, не зависящий от его места в списке. */
+export const monitorKey = (m: Monitor): string => `${m.rect.left},${m.rect.top},${m.rect.right},${m.rect.bottom}`;
+
+/** Монитор под курсором; курсора нет или он вне экранов — −1. */
+export function looked(world: World): number {
+  const c = world.cursor;
+  return c ? world.monitors.findIndex((m) => inRect(m.rect, c.x, c.y)) : -1;
+}
+
+/**
+ * Жилые мониторы: курсор был на них за последние UNSEEN_MS (seen — когда, по monitorKey).
+ * Не был ни на одном — основной. Активное окно не в счёт: фокус остаётся и на погасшем экране.
+ */
+export function lived(world: World, seen: Record<string, number>, now: number): number[] {
+  const out = world.monitors.flatMap((m, i) => (now - (seen[monitorKey(m)] ?? -Infinity) < UNSEEN_MS ? [i] : []));
+  return out.length > 0 ? out : [Math.max(world.monitors.findIndex((m) => m.primary), 0)];
+}
+
+/** Ближайший к монитору i из списка, по расстоянию между серединами. */
+function closest(world: World, i: number, list: number[]): number {
+  const mid = (k: number) => {
+    const r = world.monitors[k].rect;
+    return [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+  };
+  const [x, y] = mid(i);
+  let best = list[0];
+  for (const k of list) {
+    const [a, b] = mid(k);
+    const [c, d] = mid(best);
+    if (Math.hypot(a - x, b - y) < Math.hypot(c - x, d - y)) best = k;
+  }
+  return best;
+}
+
+/**
  * Где посидеть ('rest') или поспать ('sleep'). Всегда у края, никогда не в центре монитора.
  * rest: чаще пол у края, иначе случайный карниз текущего монитора у одного из концов.
  * sleep: карниз, широкие вероятнее; предпочтительно на текущем мониторе; карнизов нет — пол у края.
+ * Только на мониторах из use (по умолчанию все); с другого монитора — на ближайший из них.
  */
-export function pickSpot(world: World, pet: Pet, kind: 'rest' | 'sleep', rnd: () => number): Goal {
-  const all = surfaces(world);
-  const i = Math.max(monitorAt(world, pet.x, pet.y), 0);
+export function pickSpot(world: World, pet: Pet, kind: 'rest' | 'sleep', rnd: () => number, use?: number[]): Goal {
+  const ok = use?.filter((k) => world.monitors[k]) ?? [];
+  const live = ok.length > 0 ? ok : world.monitors.map((_, k) => k);
+  const all = surfaces(world).filter((s) => live.includes(s.monitor));
+  let i = Math.max(monitorAt(world, pet.x, pet.y), 0);
+  if (!live.includes(i)) i = closest(world, i, live);
   const half = side(world.monitors[i]) / 2;
   const floor = (): Goal => {
     const f = floorOf(all, i);

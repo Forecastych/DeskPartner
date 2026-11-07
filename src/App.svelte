@@ -245,6 +245,8 @@
   let eatUntil = 0;
   /** Мониторы и окна-насесты; null — Rust их не дал (не Windows или ошибка), кошка стоит, где поставили. */
   let world: roam.World | null = null;
+  /** Когда курсор последний раз был на мониторе (roam.monitorKey → Date.now()): на погасший кошка не ходит. */
+  const seen: Record<string, number> = {};
   let pet: roam.Pet | null = null;
   /** Лазерная точка, физ. px рабочего стола; null — лазер выключен. */
   let dot: roam.Dot | null = null;
@@ -460,7 +462,15 @@
     if (!pet || !world || pet.move === 'out' || away() || pet.hunt || filming() || revenge.owns(payback)) return;
     const bed = kind === 'sleep' && bedOn && Math.random() < BED_SLEEP ? roam.bedAt(world, bedPlace) : null;
     bedBound = bed !== null;
-    pet = roam.goTo(pet, world, bed ? { surface: bed.surface, x: bed.x } : roam.pickSpot(world, pet, kind, Math.random));
+    const spot = bed ? { surface: bed.surface, x: bed.x } : roam.pickSpot(world, pet, kind, Math.random, roam.lived(world, seen, Date.now()));
+    pet = roam.goTo(pet, world, spot);
+  }
+
+  /** Сидит на мониторе, куда человек давно не смотрел: скорее всего, он выключен. */
+  function strayed(): boolean {
+    if (!pet || !world) return false;
+    const m = roam.monitorOf(world, pet);
+    return !!m && !roam.lived(world, seen, Date.now()).includes(world.monitors.indexOf(m));
   }
 
   /** Смотрит кино: идёт в угол у края монитора с фильмом; уже там — сидит. */
@@ -811,7 +821,8 @@
     if (now >= restUntil) {
       rest = pick(RESTS);
       restUntil = now + REST_MIN_MS + Math.random() * (REST_MAX_MS - REST_MIN_MS);
-      if (Math.random() < WANDER) wander('rest');
+      // с погасшего монитора — домой, не дожидаясь случая
+      if (Math.random() < WANDER || strayed()) wander('rest');
       if (pet?.move === 'walk') return 'walk';
     }
     return rest;
@@ -1012,6 +1023,8 @@
     try {
       const w = await invoke<roam.World>('world');
       world = w.monitors.length ? w : null;
+      const k = world ? roam.looked(world) : -1;
+      if (k >= 0) seen[roam.monitorKey(world!.monitors[k])] = lastWorld;
       // полки внутри окон нужны только мыши на весь экран
       if (hunt && hunterArea === 'screen' && lastWorld - lastShelves >= SHELVES_MS) {
         lastShelves = lastWorld;

@@ -29,8 +29,11 @@ import {
   JUMP_MAX_MS,
   leave,
   type Ledge,
+  lived,
+  looked,
   MAX_DT_MS,
   type Monitor,
+  monitorKey,
   monitorOf,
   onStrip,
   type Move,
@@ -49,6 +52,7 @@ import {
   STRIP_DEPTH,
   step,
   surfaces,
+  UNSEEN_MS,
   WALK,
   type World,
 } from './roam';
@@ -569,6 +573,64 @@ describe('pickSpot', () => {
       expect(center(g.x, FHD)).toBe(false);
       expect(g.x).toBeGreaterThanOrEqual(0);
       expect(g.x).toBeLessThanOrEqual(1920);
+    }
+  });
+});
+
+describe('погасший монитор', () => {
+  const SECOND = monitor(1920, 0, 1920, 1080);
+
+  it('looked: монитор под курсором; курсора нет или он мимо экранов — −1', () => {
+    const w = world([FHD, SECOND]);
+    expect(looked({ ...w, cursor: { x: 2500, y: 300 } })).toBe(1);
+    expect(looked({ ...w, cursor: { x: 10, y: 10 } })).toBe(0);
+    expect(looked({ ...w, cursor: null })).toBe(-1);
+    expect(looked(w)).toBe(-1);
+    expect(looked({ ...w, cursor: { x: 5000, y: 300 } })).toBe(-1);
+  });
+
+  it('lived: где курсор был недавно; нигде — основной', () => {
+    const w = world([FHD, SECOND]);
+    const now = 1_000_000_000;
+    expect(lived(w, {}, now)).toEqual([0]);
+    expect(lived(w, { [monitorKey(SECOND)]: now - 1000 }, now)).toEqual([1]);
+    expect(lived(w, { [monitorKey(FHD)]: now, [monitorKey(SECOND)]: now - UNSEEN_MS + 1 }, now)).toEqual([0, 1]);
+    expect(lived(w, { [monitorKey(FHD)]: now, [monitorKey(SECOND)]: now - UNSEEN_MS }, now)).toEqual([0]);
+    // основной не первым в списке — всё равно он; ключ не зависит от порядка
+    const flipped: World = { monitors: [{ ...FHD, primary: false }, { ...SECOND, primary: true }], ledges: [] };
+    expect(lived(flipped, {}, now)).toEqual([1]);
+    expect(lived(flipped, { [monitorKey(FHD)]: now }, now)).toEqual([0]);
+  });
+
+  it('спать не уходит на рамки и полосы нежилого монитора', () => {
+    const w: World = { ...world([FHD, SECOND], [ledge(1, 2200, 400, 2800)]), active: 5, strips: [ledge(5, 1920, 0, 3700)] };
+    for (let seed = 1; seed <= 200; seed++) {
+      const g = pickSpot(w, spawn(w), 'sleep', lcg(seed), [0]);
+      expect(g.surface).toBe('floor:0');
+      expect(pickSpot(w, spawn(w), 'rest', lcg(seed), [0]).surface).toBe('floor:0');
+      // оба жилые — как раньше: чужая рамка лучше пола
+      expect(pickSpot(w, spawn(w), 'sleep', lcg(seed), [0, 1]).surface).toBe('ledge:1:2200');
+    }
+  });
+
+  it('с нежилого монитора возвращается на жилой и доходит', () => {
+    const w = world([FHD, SECOND], [ledge(1, 2200, 400, 2800)]);
+    const cat = standing(w, 2900, 1);
+    for (let seed = 1; seed <= 100; seed++) {
+      for (const kind of ['rest', 'sleep'] as const) {
+        expect(pickSpot(w, cat, kind, lcg(seed), [0]).surface).toBe('floor:0');
+      }
+    }
+    const [p, events] = run(goTo(cat, w, pickSpot(w, cat, 'rest', lcg(1), [0])), w, 120_000);
+    expect(events).toContain('arrived');
+    expect(monitorOf(w, p)).toEqual(w.monitors[0]);
+  });
+
+  it('пустой или битый список мониторов — все жилые', () => {
+    const w = world([FHD, SECOND], [ledge(1, 2200, 400, 2800)]);
+    for (let seed = 1; seed <= 50; seed++) {
+      expect(pickSpot(w, spawn(w), 'sleep', lcg(seed), []).surface).toBe('ledge:1:2200');
+      expect(pickSpot(w, spawn(w), 'sleep', lcg(seed), [7]).surface).toBe('ledge:1:2200');
     }
   });
 });
