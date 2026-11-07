@@ -4,6 +4,7 @@
   // пока окно открыто: так видно, как ленты новой темы скачались сразу после галочки.
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
+  import { WORK_TOPICS } from './lib/chatter';
   import { t } from './lib/i18n';
   import { feedState, newsStatus, newsSummary, type NewsStatus } from './lib/news';
   import { topicName, type Topic } from './lib/settings';
@@ -13,6 +14,9 @@
   const POLL_MS = 5000;
   /** После «Обновить сейчас» — спросить вскоре: поток уже проснулся. */
   const SOON_MS = 700;
+
+  /** Темы, о которых кошка говорит и в рабочее время: «наука, техника, программирование». */
+  const work = WORK_TOPICS.map(topicName).join(', ');
 
   let status = $state<NewsStatus | null>(null);
   let failed = $state(false);
@@ -58,6 +62,12 @@
         </li>
       {/each}
     </ul>
+    <Hint>
+      {t(
+        `Новости кошка рассказывает между делом: первую — вскоре после выбора темы, дальше раз в 1–3 часа за компьютером. В будни с 9 до 18 — только ${work}. Не терпится — «Расскажи новость» в меню кошки.`,
+        `The cat tells the news in passing: the first story soon after you pick a topic, then once every 1–3 hours at the computer. On weekdays from 9 to 18, only ${work}. Can't wait? "Tell me the news" in the cat's menu.`,
+      )}
+    </Hint>
     <Hint>
       {t(
         'Под новостью в облачке есть «Ещё» и «Мимо»: тема и источник будут попадаться чаще или реже.',

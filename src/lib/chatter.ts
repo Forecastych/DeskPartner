@@ -39,6 +39,8 @@ export const LIKED_MS = MIN;
 export const FACT_RANGE: [number, number] = [3600, 3 * 3600];
 /** В рабочее время факт ждёт сверх срока ещё столько: можно, но редко. */
 export const FACT_WORK_EXTRA = 2 * 3600;
+/** Выбрали новую тему — первый факт через столько чистого времени, секунды: видно, что галочка сработала. */
+export const FACT_FIRST: [number, number] = [10 * 60, 20 * 60];
 /** О чём можно и в рабочее время; остальные темы — для отдыха. */
 export const WORK_TOPICS: readonly Topic[] = ['наука', 'техника', 'программирование'];
 /** Вес темы: погладили после факта — умножаем, отмахнулись — делим. Ноль нельзя: тему человек выбрал сам. */
@@ -162,6 +164,15 @@ export function fresh(now: number, level: Chatter, rand: () => number): Talk {
 /** Между фактами, секунды чистого времени. */
 export function factGap(rand: () => number): number {
   return FACT_RANGE[0] + rand() * (FACT_RANGE[1] - FACT_RANGE[0]);
+}
+
+/**
+ * Добавили тему — первый факт скоро, а не через час-три. В рабочее время срок сразу с запасом
+ * FACT_WORK_EXTRA, иначе «скоро» наступило бы только вечером. Уже подошедший срок не отодвигаем.
+ */
+export function topicAdded(t: Talk, now: Date, rand: () => number): Talk {
+  const soon = FACT_FIRST[0] + rand() * (FACT_FIRST[1] - FACT_FIRST[0]) - (isWork(now) ? FACT_WORK_EXTRA : 0);
+  return { ...t, factIn: Math.min(t.factIn, soon) };
 }
 
 /** Между репликами: случайно в пределах уровня, растянуто отмахиваниями. Молчуну — никогда. */

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CARE_SECS,
   duration,
+  FACT_FIRST,
   FACT_RANGE,
   FACT_WORK_EXTRA,
   factGap,
@@ -21,6 +22,7 @@ import {
   shoo,
   shownFor,
   type Talk,
+  topicAdded,
   vote,
 } from './chatter';
 import { FACTS } from './facts';
@@ -259,6 +261,28 @@ describe('facts', () => {
     now = at(now, GAP_MS);
     [, line] = say({ ...t, next: now.getTime() }, moment(now, { today: 3600, topics: ['кино'] }), 'sometimes', r);
     expect(line?.key).toBe('fact:кино');
+  });
+
+  it('a new topic brings the first fact soon, in work hours too', () => {
+    const r = () => 0; // самый короткий срок — FACT_FIRST[0]
+    const first = FACT_FIRST[0];
+    // отсчёт чистого времени — с нуля, в паузе кошка молчит
+    const start = (base: Date) => say(topicAdded(fresh(base.getTime(), 'sometimes', mid), base, r), moment(base, { pause: false, today: 0 }), 'sometimes', r)[0];
+    let t = start(SAT);
+    expect(t.factIn).toBe(first);
+    let now = at(SAT, GAP_MS);
+    [t] = say(t, moment(now, { pause: false, today: first - 1 }), 'sometimes', r);
+    let [, line] = say({ ...t, next: now.getTime() }, moment(now, { today: first - 1, topics: ['кино'] }), 'sometimes', r);
+    expect(line?.key).not.toMatch(/^fact:/);
+    [, line] = say({ ...t, next: now.getTime() }, moment(now, { today: first, topics: ['кино'] }), 'sometimes', r);
+    expect(line?.key).toBe('fact:кино');
+    // в работе — тот же короткий срок, а не ещё два часа сверху
+    t = start(TUE);
+    now = at(TUE, GAP_MS);
+    [, line] = say({ ...t, next: now.getTime() }, moment(now, { today: first, topics: ['техника'] }), 'sometimes', r);
+    expect(line?.key).toBe('fact:техника');
+    // срок, который уже подошёл, не отодвигается
+    expect(topicAdded(ripe(SAT), SAT, r).factIn).toBe(0);
   });
 
   it('counts a new day from zero', () => {

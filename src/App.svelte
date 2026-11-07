@@ -976,14 +976,17 @@
   }
 
   /**
-   * «Новость» из трея dev-сборки: свежая по любой из тем, мимо сроков и рабочего времени.
-   * Тем нет или ленты ещё не скачаны — так и говорит, чтобы было видно, что пункт сработал.
+   * «Расскажи новость» из меню кошки (и из трея dev-сборки): свежая по любой из тем, мимо сроков
+   * и рабочего времени — человек попросил сам. Тем нет или ленты ещё не скачаны — так и говорит,
+   * чтобы было видно, что пункт сработал.
    */
   function newsNow() {
     if (frozen || !head || away()) return;
     const show = (text: string, about: { topic: Topic; source: string } | null = null) => {
       if (speakingUntil) hush();
       forced = true;
+      // после облачка — обычная тишина GAP_MS, чтобы следом не заговорила сама
+      talk = { ...talk, spoke: Date.now() };
       speak(text, Date.now(), about);
     };
     if (!topics.length) return show(t('Тем не выбрано — новостей не будет.', 'No topics chosen, so no news.'));
@@ -1276,6 +1279,8 @@
     if (s.yarn && !yarnOn) nextYarn = Date.now() + yarnGap();
     yarnOn = s.yarn;
     mode = s.mode;
+    // новая тема — первый факт или новость про неё скоро, а не через час-три
+    if (s.topics.some((x) => !topics.includes(x))) talk = chatter.topicAdded(talk, new Date(), Math.random);
     topics = s.topics;
     // трей и его подсказка тоже зовут питомца по имени
     if (s.name !== petName) invoke('name_pet', { name: s.name }).catch(console.error);
@@ -1343,6 +1348,12 @@
         ? [{ id: 'update', text: t(`Обновить до ${updateTo}`, `Update to ${updateTo}`), hint: t('перезапустится сама', 'restarts by itself') }, { separator: true }]
         : []),
       {
+        id: 'news',
+        text: t('Расскажи новость', 'Tell me the news'),
+        hint: topics.length ? t('по выбранным темам', 'on your topics') : t('сначала выбери темы', 'pick topics first'),
+      },
+      { separator: true },
+      {
         id: 'feeder',
         text: t('Кормушка', 'Feeder'),
         checked: s.feeder,
@@ -1368,6 +1379,9 @@
     else if (id === 'settings') invoke('open_settings').catch(console.error);
     else if (id === 'stats') invoke('open_stats').catch(console.error);
     else if (id === 'update') installUpdate();
+    // без тем рассказывать нечего — ведём туда, где их выбирают
+    else if (id === 'news' && topics.length) newsNow();
+    else if (id === 'news') invoke('open_settings').catch(console.error);
     else if (id === 'about') invoke(petName ? 'open_stats' : 'open_settings').catch(console.error);
   }
 
