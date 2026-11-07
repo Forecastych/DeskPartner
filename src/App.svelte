@@ -18,7 +18,7 @@
   import * as tally from './lib/stats';
   import * as chrono from './lib/chrono';
   import * as holidays from './lib/holidays';
-  import { ANIMS, BOWL_X, bowlLeft, draw, dress, fatOn, flip, ground, hitMask, onBowl, SCRUFF_AT, SIZE, type AnimName, type Frame } from './lib/sprite';
+  import { ANIMS, BOWL_AT, BOWL_X, bowlLeft, draw, dress, fatOn, flip, ground, hitMask, onBowl, SCRUFF_AT, SIZE, type AnimName, type Frame } from './lib/sprite';
   import { localLegacy, memoryStore, open, tauriBackend, type Store } from './lib/store';
   import * as wiki from './lib/wiki';
   import { count, t } from './lib/i18n';
@@ -372,10 +372,10 @@
   /** К миске; у миски — мордой к ней, она справа. */
   function toBowl() {
     if (!pet || !world || pet.move === 'out' || away() || pet.hunt || revenge.owns(payback)) return;
-    const b = roam.bowlAt(world, bowlPlace);
+    const b = roam.bowlSpot(world, bowlPlace);
     if (!b) return;
     if (roam.atBowl(pet, world, bowlPlace)) pet = { ...pet, facing: -1 };
-    else if (pet.goal?.surface !== b.surface || pet.goal.x !== b.x) pet = roam.goTo(pet, world, { surface: b.surface, x: b.x });
+    else if (pet.goal?.surface !== b.surface || pet.goal.x !== b.x) pet = roam.goTo(pet, world, b);
   }
 
   /** Еда в миске: у миски — ест сразу, иначе сначала идёт к ней. */
@@ -612,7 +612,8 @@
       if (roam.onStrip(pet) && pet.move === 'still' && sleepy.mood(nap) !== 'asleep') wander('rest');
       // голодная и бодрая — идёт к миске; спящую голод не будит
       if ((isHungry(belly) || mealPending) && sleepy.mood(nap) === 'awake') toBowl();
-      else if (film.active && sleepy.mood(nap) === 'awake' && !away()) toSeat();
+      // в кино — когда поела и умылась: в пути «eat» не показать, а корм уже съеден
+      else if (film.active && sleepy.mood(nap) === 'awake' && !away() && now >= groomUntil) toSeat();
       // разбудили — про лежак забыла до следующего сна
       if (bedBound && sleepy.mood(nap) === 'asleep') toBed();
       else bedBound = false;
@@ -827,9 +828,9 @@
     const half = roam.side(m) / 2;
     const cell = roam.side(m) / SIZE;
     let x = pet.x;
-    // у миски окно кошки ложится так, чтобы миска в кадре совпала с окном миски: ест — наклоняется
-    const bowl = roam.atBowl(pet, world, bowlPlace) ? bowlLeft(frame) : null;
-    if (bowl !== null) x += (BOWL_X - bowl) * cell;
+    // у миски кошка стоит над миской: в hungry и eat миска в кадре на BOWL_AT и совпадает с окном
+    // миски сама, в позах без миски кошка отходит и сидит слева от неё
+    if (roam.atBowl(pet, world, bowlPlace)) x += (BOWL_AT - (bowlLeft(frame) ?? BOWL_X)) * cell;
     if (anim === 'zzz') x = pet.exit < 0 ? m.work.left + half - Z_LEFT * cell : m.work.right + half - (Z_RIGHT + 1) * cell;
     const bottom = pet.y + (SIZE - 1 - (anim ? ground(anim) : SIZE - 1)) * cell;
     const at = { x: Math.round(x), bottom: Math.round(bottom) };

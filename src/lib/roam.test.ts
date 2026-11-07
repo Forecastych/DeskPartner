@@ -7,7 +7,9 @@ import {
   BONK_COOL,
   BONK_MS,
   bowlAt,
+  bowlSpot,
   BOWL_INSET,
+  BOWL_LEAN,
   chase,
   CHASE_JUMP,
   type ChaseEvent,
@@ -657,6 +659,15 @@ describe('миска', () => {
 
   it('без мониторов миски нет', () => {
     expect(bowlAt(world([]))).toBeNull();
+    expect(bowlSpot(world([]))).toBeNull();
+  });
+
+  it('кошка встаёт правее середины окна миски, над самой миской, и не дальше полспрайта от края', () => {
+    const w = world([monitor(0, 0, 2560, 1440, 1.5)]);
+    const b = bowlAt(w)!;
+    const spot = bowlSpot(w)!;
+    expect(spot).toEqual({ surface: b.surface, x: b.x + SIDE * 1.5 * BOWL_LEAN });
+    expect(spot.x + (SIDE * 1.5) / 2).toBeLessThanOrEqual(2560 - EDGE_GAP);
   });
 
   it('дошла до миски — стоит у миски; по дороге — ещё нет', () => {
@@ -664,7 +675,7 @@ describe('миска', () => {
     let pet = goTo(spawn(w), w, { surface: 'floor:0', x: 200 });
     [pet] = run(pet, w, 60_000);
     expect(atBowl(pet, w)).toBe(false);
-    pet = goTo(pet, w, bowlAt(w)!);
+    pet = goTo(pet, w, bowlSpot(w)!);
     expect(atBowl(pet, w)).toBe(false);
     [pet] = run(pet, w, 60_000);
     expect(atBowl(pet, w)).toBe(true);
@@ -683,7 +694,7 @@ describe('миска', () => {
   it('у миски, поставленной в другое место, — только там', () => {
     const w = world([monitor(0, 0, 1920, 1080)]);
     const at = { x: 700, y: 1040 };
-    let pet = goTo(spawn(w), w, bowlAt(w, at)!);
+    let pet = goTo(spawn(w), w, bowlSpot(w, at)!);
     [pet] = run(pet, w, 60_000);
     expect(atBowl(pet, w, at)).toBe(true);
     expect(atBowl(pet, w)).toBe(false);

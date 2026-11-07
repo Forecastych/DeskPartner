@@ -203,6 +203,11 @@ const FLOOR_TAIL: Part = ['............', '.kkkkkkkkkk.', 'kffffffdddk.', '.kkkk
 
 // Миска 10×5 и горка корма над ней.
 const BOWL: Part = ['BBBBBBBBBB', 'BbbbbbbbbB', 'BbbbbbbbbB', '.BbbbbbbB.', '..BBBBBB..'];
+/**
+ * Левый столбец миски в позах hungry и eat: миска под мордой, по центру кадра. Миска симметрична
+ * относительно середины кадра, так что и в отражённом кадре столбец тот же.
+ */
+export const BOWL_AT = 11;
 const KIBBLE: Part = ['..cCccCc..', '.cccCcccC.'];
 // В кормушке горка растёт с числом порций: одна, две-три, четыре и больше.
 const PILES: Part[] = [KIBBLE, ['...cCcc...', ...KIBBLE], ['....cC....', '...cCcc...', ...KIBBLE]];
@@ -456,11 +461,11 @@ function faceplant(fat: Fat, tail: Part, z: [Part, number, number]): Frame {
   return compose([tail, 17, y0 - 6], [back, 16 - half, y0], [[...HEAD_TOP, 'kkkkkkkkkkkk'], 10, SIZE - 6], z);
 }
 
-/** Просит есть: сидит рядом с пустой миской и смотрит на человека. */
+/** Просит есть: сидит за пустой миской, лапы за её бортом, и смотрит на человека. */
 function hungry(fat: Fat, eyes: Part, mouth: Part, tail: Part): Frame {
   const body = frontBody(fat, SIT_HALF, true);
   const half = body[0].length / 2;
-  return compose([tail, 13 + half, 26], [body, 16 - half, 22], [head(eyes, mouth), 10, 12], [BOWL, 0, SIZE - 5]);
+  return compose([tail, 13 + half, 26], [body, 16 - half, 22], [head(eyes, mouth), 10, 12], [BOWL, BOWL_AT, SIZE - 5]);
 }
 
 /** Ест: спина горбом, голова опущена в миску, над краем видны уши и лоб; `headY` — кивок жуя. */
@@ -472,8 +477,8 @@ function eating(fat: Fat, headY: number, tail: Part): Frame {
     [tail, 17, y0 - 6],
     [back, 16 - half, y0],
     [head(EYES_SHUT), 10, headY],
-    [KIBBLE, 11, SIZE - 7],
-    [BOWL, 11, SIZE - 5],
+    [KIBBLE, BOWL_AT, SIZE - 7],
+    [BOWL, BOWL_AT, SIZE - 5],
   );
 }
 
@@ -880,8 +885,9 @@ export function draw(ctx: CanvasRenderingContext2D, frame: Frame): void {
 }
 
 /**
- * Левый столбец миски в окне миски. Миска у правого края кадра — там же, где она в позе
- * `hungry`, отражённой влево: кошка у миски стоит слева от неё, и две миски совпадают пиксель в пиксель.
+ * Левый столбец миски в окне миски. Миска у правого края кадра: в позах без миски кошка у миски
+ * сидит слева от неё, а в hungry и eat её окно сдвинуто вправо на BOWL_X − BOWL_AT клеток, и две
+ * миски совпадают пиксель в пиксель.
  */
 export const BOWL_X = SIZE - BOWL[0].length;
 

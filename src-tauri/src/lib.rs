@@ -344,7 +344,8 @@ async fn name_pet(app: AppHandle, name: String) {
 #[cfg(windows)]
 fn boss(app: &AppHandle) {
     let hidden = win::toggle_boss();
-    for w in SPRITES.iter().chain(["puddle"].iter()).filter_map(|l| app.get_webview_window(l)) {
+    // show() кладёт окно наверх: лужа первой, чтобы кошка вернулась поверх неё
+    for w in ["puddle"].iter().chain(SPRITES.iter()).filter_map(|l| app.get_webview_window(l)) {
         let done = if hidden { w.hide() } else { w.show() };
         if let Err(err) = done {
             eprintln!("boss {}: {err}", w.label());

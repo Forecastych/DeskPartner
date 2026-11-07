@@ -721,10 +721,14 @@ export function pickSpot(world: World, pet: Pet, kind: 'rest' | 'sleep', rnd: ()
 }
 
 /**
- * Отступ миски от правого края work в долях стороны спрайта. Кошка ест, наклонившись над миской,
- * и её кадр сдвинут на 11 клеток вправо от окна миски: без отступа хвост уехал бы за край экрана.
+ * На сколько правее середины окна миски стоит кошка у миски, в долях стороны спрайта: миска
+ * нарисована у правого края своего окна, а в кадре кошки — по центру (sprite: BOWL_X − BOWL_AT
+ * клеток из 32). Там кошка и ест, и просит есть — дошла и больше не сдвигается.
  */
-export const BOWL_INSET = 0.25;
+export const BOWL_LEAN = 11 / 32;
+
+/** Отступ миски от правого края work в долях стороны спрайта: кадр кошки у миски не уедет за край. */
+export const BOWL_INSET = BOWL_LEAN;
 
 /**
  * Куда поставили миску или лежак: x — середина окна, y — его низ, физ. px. На рамке окна — ещё
@@ -802,11 +806,16 @@ function settle(world: World, at: Place | null, right: number, home: 'lo' | 'hi'
   return best ?? putOn(world, floorOf(all, i), x, right);
 }
 
-/**
- * Где стоит окно миски: по умолчанию на полу основного монитора у правого угла; x — середина окна.
- * Кошка у миски стоит в той же точке: её окно ложится ровно на окно миски.
- */
+/** Где стоит окно миски: по умолчанию на полу основного монитора у правого угла; x — середина окна. */
 export const bowlAt = (world: World, at: Place | null = null): Thing | null => settle(world, at, 0.5 + BOWL_INSET, 'hi');
+
+/** Куда встаёт кошка у миски: на BOWL_LEAN правее середины её окна, мордой в миску. */
+export function bowlSpot(world: World, at: Place | null = null): Goal | null {
+  const b = bowlAt(world, at);
+  const s = b && surfaces(world).find((c) => c.id === b.surface);
+  const m = s && world.monitors[s.monitor];
+  return b && m ? { surface: b.surface, x: b.x + BOWL_LEAN * side(m) } : null;
+}
 
 /** Где стоит лежак: как миска, по умолчанию — у левого угла основного монитора. */
 export const bedAt = (world: World, at: Place | null = null): Thing | null => settle(world, at, 0.5, 'lo');
@@ -816,7 +825,7 @@ const standsAt = (pet: Pet, g: Goal | null): boolean =>
   g !== null && pet.move === 'still' && pet.on === g.surface && Math.abs(pet.x - g.x) < 1;
 
 /** Стоит у миски. */
-export const atBowl = (pet: Pet, world: World, at: Place | null = null): boolean => standsAt(pet, bowlAt(world, at));
+export const atBowl = (pet: Pet, world: World, at: Place | null = null): boolean => standsAt(pet, bowlSpot(world, at));
 
 /** Стоит у лежака (в нём). */
 export const atBed = (pet: Pet, world: World, at: Place | null = null): boolean => standsAt(pet, bedAt(world, at));

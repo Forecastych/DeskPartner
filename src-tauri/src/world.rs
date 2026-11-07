@@ -257,7 +257,15 @@ pub fn place_pet(window: WebviewWindow, x: i32, bottom: i32) -> Result<(), Strin
     let top = bottom - size.height as i32;
     window
         .set_position(PhysicalPosition::new(left - (inner.x - outer.x), top - (inner.y - outer.y)))
-        .map_err(e)
+        .map_err(e)?;
+    // вещи — под кошкой: в лежаке её прикрывает бортик из её же кадра, а окно лежака поверх неё
+    // рисует подушку на спящей; порядок между нашими окнами сбивается, стоит потаскать вещь мышью
+    if window.label() != "pet" {
+        if let Some(pet) = tauri::Manager::get_webview_window(&window, "pet") {
+            sys::under(&window, &pet);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -275,7 +283,8 @@ mod sys {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumChildWindows, EnumWindows, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect,
         GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GW_OWNER,
-        MONITORINFOF_PRIMARY, WS_CHILD, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+        MONITORINFOF_PRIMARY, SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_CHILD,
+        WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
     };
 
     /// Классы рабочего стола и панелей задач: на них не сидят, хотя закрывать они закрывают.
@@ -440,6 +449,14 @@ mod sys {
         }
     }
 
+    /// Окно `w` — сразу под `top` по z-order, без активации и не дожидаясь их потоков.
+    pub fn under(w: &tauri::WebviewWindow, top: &tauri::WebviewWindow) {
+        let (Ok(h), Ok(t)) = (w.hwnd(), top.hwnd()) else { return };
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+        // SAFETY: только меняет порядок двух наших окон
+        unsafe { SetWindowPos(h.0 as HWND, t.0 as HWND, 0, 0, 0, 0, flags) };
+    }
+
     /// Имя класса — не заголовок: по нему узнаём рабочий стол и панели задач.
     unsafe fn shell(h: HWND) -> bool {
         let mut buf = [0u16; 64];
@@ -465,6 +482,7 @@ mod sys {
     pub fn children(_: i64) -> Vec<Child> {
         Vec::new()
     }
+    pub fn under(_: &tauri::WebviewWindow, _: &tauri::WebviewWindow) {}
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ANIMS, bedFrame, bedMask, BOWL_X, bowlFrame, bowlLeft, fatOn, FATS, flip, hitMask, onBowl, PALETTE, PUDDLE_FRAMES, PUDDLE_H, PUDDLE_W, SCRUFF_AT, SIZE } from './sprite';
+import { BOWL_LEAN } from './roam';
+import { ANIMS, bedFrame, bedMask, BOWL_AT, BOWL_X, bowlFrame, bowlLeft, fatOn, FATS, flip, hitMask, onBowl, PALETTE, PUDDLE_FRAMES, PUDDLE_H, PUDDLE_W, SCRUFF_AT, SIZE } from './sprite';
 
 const all = FATS.flatMap((fat) =>
   Object.entries(ANIMS[fat]).flatMap(([name, a]) => a.frames.map((f, i) => [`${name}[${i}] жир ${fat}`, f] as const)),
@@ -150,14 +151,14 @@ describe('сезонный жирок', () => {
 });
 
 describe('окно миски', () => {
-  it('пустая миска совпадает с миской в позе hungry, отражённой влево', () => {
+  it('пустая миска совпадает с миской в позе hungry, отражённой влево и сдвинутой, как её сдвигает App', () => {
     const empty = bowlFrame(0);
+    const dx = BOWL_X - BOWL_AT;
     for (const fat of FATS)
       for (const f of ANIMS[fat].hungry.frames) {
         const g = flip(f);
-        expect(bowlLeft(g)).toBe(BOWL_X);
         for (let y = 0; y < SIZE; y++)
-          for (let x = 0; x < SIZE; x++) if (onBowl(empty, x, y)) expect(g[y][x]).toBe(empty[y][x]);
+          for (let x = 0; x < SIZE; x++) if (onBowl(empty, x, y)) expect(g[y][x - dx]).toBe(empty[y][x]);
       }
   });
 
@@ -171,8 +172,16 @@ describe('окно миски', () => {
     for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) if (f[y][x] !== '.') expect(onBowl(f, x, y)).toBe(true);
   });
 
-  it('в позе еды миска левее на 11 клеток — настолько App сдвигает окно кошки', () => {
-    for (const fat of FATS) for (const f of ANIMS[fat].eat.frames) expect(BOWL_X - bowlLeft(flip(f))!).toBe(11);
+  it('просит и ест над одной и той же миской: она на BOWL_AT и в прямом кадре, и в отражённом', () => {
+    for (const fat of FATS)
+      for (const f of [...ANIMS[fat].hungry.frames, ...ANIMS[fat].eat.frames]) {
+        expect(bowlLeft(f)).toBe(BOWL_AT);
+        expect(bowlLeft(flip(f))).toBe(BOWL_AT);
+      }
+  });
+
+  it('roam ставит кошку у миски ровно на сдвиг миски в кадре', () => {
+    expect(BOWL_LEAN * SIZE).toBe(BOWL_X - BOWL_AT);
   });
 
   it('без миски в кадре — null', () => {
