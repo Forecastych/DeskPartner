@@ -128,6 +128,26 @@ function formSrc(raw) {
   return url.href;
 }
 
+// «Скачать» сразу отдаёт установщик: страница релиза рядом с ним показывает .sig и latest.json
+// для автообновления, и люди качают не то. Имя файла меняется с версией, поэтому спрашиваем
+// GitHub; не ответил – кнопка остаётся на странице релиза.
+async function installer() {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${CONFIG.REPO}/releases/latest`, {
+      headers: { Accept: 'application/vnd.github+json' },
+      referrerPolicy: 'no-referrer',
+    });
+    if (!res.ok) return;
+    const { assets = [] } = await res.json();
+    const exe = assets.find((a) => a.name.endsWith('-setup.exe'));
+    if (!exe || !exe.browser_download_url.startsWith(`${gh}/releases/download/`)) return;
+    LINKS.download = exe.browser_download_url;
+    links();
+  } catch {
+    // нет сети или лимит API – остаётся страница релиза
+  }
+}
+
 const src = formSrc(CONFIG.FORM_URL.trim());
 if (src) {
   const box = document.getElementById('form');
@@ -140,3 +160,4 @@ if (src) {
 }
 
 render();
+installer();
