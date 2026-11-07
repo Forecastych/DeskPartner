@@ -1,6 +1,6 @@
 [package]
 name = "deskpartner"
-version = "1.0.0"
+version = "1.0.1"
 description = "A pixel cat that lives on your screen edges and window frames"
 repository = "https://github.com/Forecastych/DeskPartner"
 authors = ["Forecastych"]

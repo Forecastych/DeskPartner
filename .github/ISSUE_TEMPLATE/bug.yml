@@ -39,7 +39,7 @@ body:
     attributes:
       label: App version / Версия программы
       description: It is in the installer file name and in the Windows list of installed apps. / Есть в имени установщика и в списке установленных приложений Windows.
-      placeholder: "1.0.0"
+      placeholder: "1.0.1"
     validations:
       required: true
   - type: dropdown
