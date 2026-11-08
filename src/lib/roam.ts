@@ -884,6 +884,12 @@ export const LITTER_SHIFT = 1.5;
 /** Где стоит лоток: как лежак, по умолчанию у левого угла основного монитора, чуть правее. */
 export const litterAt = (world: World, at: Place | null = null): Thing | null => settle(world, at, 0.5, 'lo', LITTER_SHIFT);
 
+/** Подарок без места (так не бывает: его кладут рядом с кошкой) — правее лотка, не на него. */
+const GIFT_SHIFT = 3;
+
+/** Где лежит подарок: как лоток, на поверхности под точкой; рамку из-под него убрали — падает. */
+export const giftAt = (world: World, at: Place | null = null): Thing | null => settle(world, at, 0.5, 'lo', GIFT_SHIFT);
+
 /** Стоит в лотке. */
 export const atLitter = (pet: Pet, world: World, at: Place | null = null): boolean => standsAt(pet, litterAt(world, at));
 

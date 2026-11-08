@@ -126,6 +126,11 @@ pub fn heavy(title: &str) -> bool {
     hits(&norm(title), HEAVY)
 }
 
+/// Реклама или распродажа (без проверки длины и кликбейта: анонсы игр бывают короткими).
+pub fn ad(title: &str) -> bool {
+    hits(&norm(title), ADS)
+}
+
 /// Реклама, кликбейт или слишком короткий.
 pub fn junk(title: &str) -> bool {
     let t = norm(title);

@@ -73,6 +73,8 @@ export interface FeedStatus {
   items: number;
   /** Вес по лайкам/дизам: больше 1 — чаще, меньше — реже. */
   weight: number;
+  /** Только у AniList: тайтлы из списка, которых не нашли. */
+  missing?: string[];
 }
 
 export interface NewsStatus {

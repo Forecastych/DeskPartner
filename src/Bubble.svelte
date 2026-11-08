@@ -5,6 +5,9 @@
   // Как и меню, меряем сразу после tick(): спрятанный WebView может не крутить кадры.
   // Клик по облачку — «отмахнулись»: питомец будет болтать реже. Под новостью — кнопки
   // «больше такого / меньше такого» ("bubble-vote" питомцу): голос, а не «отмахнулись».
+  // После помодоро — одна кнопка-действие («Лазер»): "bubble-act" питомцу.
+  // Под патчем игры или новой серией — «Глянем» (тот же "bubble-vote" с open: питомец откроет
+  // ссылку в браузере) и «Мимо».
   import { invoke } from '@tauri-apps/api/core';
   import { emitTo } from '@tauri-apps/api/event';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
@@ -15,6 +18,9 @@
 
   let text = $state('');
   let vote = $state(false);
+  /** Надпись кнопки-действия; null — кнопки нет. */
+  let act: string | null = $state(null);
+  let link = $state(false);
   /** Кончик хвостика, CSS px от левого края окна; null — Rust ещё не поставил окно. */
   let tail: number | null = $state(null);
   let gen = 0;
@@ -45,21 +51,31 @@
     emitTo('pet', 'bubble-shoo').catch(console.error);
   }
 
-  function voted(e: PointerEvent, up: boolean) {
+  function voted(e: PointerEvent, up: boolean, open = false) {
     // не дать нажатию всплыть до облачка: там оно значит «отмахнулись»
     e.stopPropagation();
     if (!text) return;
     text = '';
     invoke('hush').catch(console.error);
-    emitTo('pet', 'bubble-vote', { up }).catch(console.error);
+    emitTo('pet', 'bubble-vote', { up, open }).catch(console.error);
+  }
+
+  function acted(e: PointerEvent) {
+    e.stopPropagation();
+    if (!text) return;
+    text = '';
+    invoke('hush').catch(console.error);
+    emitTo('pet', 'bubble-act').catch(console.error);
   }
 
   onMount(() => {
     const win = getCurrentWebviewWindow();
-    const offText = win.listen<{ gen: number; text: string; vote: boolean }>('bubble-text', async (e) => {
+    const offText = win.listen<{ gen: number; text: string; vote: boolean; link?: boolean; act: string | null }>('bubble-text', async (e) => {
       gen = e.payload.gen;
       text = e.payload.text;
       vote = e.payload.vote;
+      link = !!e.payload.link;
+      act = e.payload.act;
       tail = null;
       await tick();
       report();
@@ -96,13 +112,28 @@
 <div class="wrap" bind:this={box} onpointerdown={shoo}>
   <div class="bubble ui-px" role="status">
     {text}
-    {#if vote}
+    {#if link}
+      <div class="votes">
+        <button class="vote ui-px" type="button" title={t('Открыть в браузере', 'Open in the browser')} onpointerdown={(e) => voted(e, true, true)}>
+          <span class="up"><Icon name="paw" /></span>{t('Глянем', 'Look')}
+        </button>
+        <button class="vote ui-px" type="button" title={t('Не сейчас', 'Not now')} onpointerdown={(e) => voted(e, false)}>
+          <span class="down"><Icon name="close" /></span>{t('Мимо', 'Skip')}
+        </button>
+      </div>
+    {:else if vote}
       <div class="votes">
         <button class="vote ui-px" type="button" title={t('Интересно — давай больше такого', 'Interesting, more like this')} onpointerdown={(e) => voted(e, true)}>
           <span class="up"><Icon name="heart" /></span>{t('Ещё', 'More')}
         </button>
         <button class="vote ui-px" type="button" title={t('Неинтересно — меньше такого', 'Not interesting, less like this')} onpointerdown={(e) => voted(e, false)}>
           <span class="down"><Icon name="broken" /></span>{t('Мимо', 'Skip')}
+        </button>
+      </div>
+    {:else if act}
+      <div class="votes">
+        <button class="vote ui-px" type="button" onpointerdown={acted}>
+          <span class="up"><Icon name="dot" /></span>{act}
         </button>
       </div>
     {/if}

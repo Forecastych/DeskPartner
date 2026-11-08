@@ -4,6 +4,7 @@
 //! Сюда приходят события ввода (сотни в секунду) и тик раз в секунду. Обработчики ввода
 //! только плюсуют числа и запоминают время, поэтому на отзывчивость ввода это не влияет.
 //! Какие именно клавиши нажимались, не храним: питомцу хватает «печатает или нет».
+//! Для достижений копятся только два итога с запуска: сколько нажатий и сколько мышь проехала.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -22,6 +23,18 @@ pub const RI_MIDDLE_DOWN: u16 = 0x0010;
 pub const RI_BUTTON4_DOWN: u16 = 0x0040;
 pub const RI_BUTTON5_DOWN: u16 = 0x0100;
 const ANY_CLICK: u16 = RI_LEFT_DOWN | RI_RIGHT_DOWN | RI_MIDDLE_DOWN | RI_BUTTON4_DOWN | RI_BUTTON5_DOWN;
+
+/// Сырое движение мыши приходит в отсчётах датчика; настоящий DPI Windows не сообщает, берём
+/// типичные 800 (как в pc_wrapped) — путь в километрах получается примерный, так и подписан.
+pub const MOUSE_DPI: f64 = 800.0;
+const MM_PER_INCH: f64 = 25.4;
+
+/// Итоги ввода с запуска программы: окно копит разницу в статистику (stats.ts, absorb).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct Totals {
+    pub keys: u64,
+    pub mouse_mm: u64,
+}
 
 /// Что тику нужно знать о текущем моменте.
 pub struct Now {
@@ -74,6 +87,8 @@ pub struct Tracker {
     last_key: Option<Instant>,
     session_start: Option<Instant>,
     last_active: Option<Instant>,
+    keys_total: u64,
+    mouse_mm: f64,
 }
 
 impl Tracker {
@@ -88,6 +103,8 @@ impl Tracker {
             last_key: None,
             session_start: None,
             last_active: None,
+            keys_total: 0,
+            mouse_mm: 0.0,
         }
     }
 
@@ -110,15 +127,22 @@ impl Tracker {
         }
         self.pressed[i] = true;
         self.minute.keys += 1;
+        self.keys_total += 1;
         self.last_key = Some(Instant::now());
         self.touch();
     }
 
-    /// Относительное движение мыши: сколько проехала, питомцу неважно, важно, что человек здесь.
+    /// Относительное движение мыши: человек здесь; путь копится для достижений.
     pub fn on_move(&mut self, dx: i32, dy: i32) {
         if dx != 0 || dy != 0 {
+            self.mouse_mm += (dx as f64).hypot(dy as f64) * MM_PER_INCH / MOUSE_DPI;
             self.touch();
         }
+    }
+
+    /// Нажатия и путь мыши с запуска.
+    pub fn totals(&self) -> Totals {
+        Totals { keys: self.keys_total, mouse_mm: self.mouse_mm as u64 }
     }
 
     /// Флаги кнопок из RAWMOUSE.usButtonFlags.
@@ -251,5 +275,22 @@ mod tests {
         assert_eq!(t.day.date, "2026-11-02");
         assert_eq!(t.day.active_seconds, 1);
         assert_eq!(t.session_secs(midnight), 1);
+    }
+
+    #[test]
+    fn totals_count_presses_and_mouse_path() {
+        let t0 = Instant::now();
+        let mut t = Tracker::new(Day::new("2026-11-01"), &now("2026-11-01", "10:00", t0));
+        assert_eq!(t.totals(), Totals::default());
+        t.on_key(0x41, true);
+        t.on_key(0x41, true); // автоповтор
+        t.on_key(0x41, false);
+        t.on_key(0x42, true);
+        // 800 отсчётов — дюйм, 25,4 мм; 3-4-5 по диагонали
+        t.on_move(800, 0);
+        t.on_move(0, 0);
+        t.on_move(-480, 640);
+        t.tick(&now("2026-11-01", "10:01", t0), None);
+        assert_eq!(t.totals(), Totals { keys: 2, mouse_mm: 50 });
     }
 }

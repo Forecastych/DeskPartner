@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { date, days, duration, fresh, groups, load, MAX_STEP_MS, plural, save, tick } from './stats';
+import { absorb, date, days, distance, duration, fresh, grouped, groups, load, MAX_STEP_MS, plural, save, tick } from './stats';
 
 const NOW = new Date(2026, 10, 6, 15, 0).getTime();
 
@@ -91,17 +91,52 @@ describe('stats', () => {
   });
 
   it('окно получает готовые строки', () => {
-    const s = { ...fresh(new Date(2026, 10, 1).getTime()), fed: 1, petted: 22, mice: 5, caught: 3, films: 2, filmMs: 4 * 3600_000 };
+    const s = { ...fresh(new Date(2026, 10, 1).getTime()), fed: 1, petted: 22, mice: 5, caught: 3, films: 2, filmMs: 4 * 3600_000, focuses: 3 };
     const g = groups(s, NOW);
     const row = (label: string) => g.flatMap((x) => x.rows).find((r) => r.label === label)!;
     expect(row('Знакомы')).toEqual({ label: 'Знакомы', value: '6 дней', hint: 'с 1 ноября 2026' });
     expect(row('Покормили').value).toBe('1 раз');
     expect(row('Погладили').value).toBe('22 раза');
+    expect(row('Спала на фокусе').value).toBe('3 раза');
     expect(row('Мыши')).toEqual({ label: 'Мыши', value: '5', hint: 'поймана 3 из 5' });
     expect(row('Кино вместе')).toEqual({ label: 'Кино вместе', value: '2 фильма', hint: '4 ч' });
     // без мышей и без кино приписки нет, а не «0 из 0»
     const empty = groups(fresh(NOW), NOW).flatMap((x) => x.rows);
     expect(empty.find((r) => r.label === 'Мыши')!.hint).toBeUndefined();
     expect(empty.find((r) => r.label === 'Кино вместе')!.hint).toBeUndefined();
+  });
+  it('тысячи и путь мыши коротко', () => {
+    expect(grouped(0)).toBe('0');
+    expect(grouped(999)).toBe('999');
+    expect(grouped(64200)).toBe('64 200');
+    expect(grouped(1234567)).toBe('1 234 567');
+    expect(distance(0)).toBe('0 см');
+    expect(distance(500)).toBe('50 см');
+    expect(distance(805_000)).toBe('805 м');
+    expect(distance(3_470_000)).toBe('3,4 км');
+    expect(distance(42_900_000)).toBe('42 км');
+  });
+
+  it('ввод копится разницей между опросами', () => {
+    const s = fresh(NOW);
+    // первый опрос — всё, что накопилось с запуска
+    const a = absorb(s, null, { keys: 120, mouse_mm: 5000 });
+    expect([a.keys, a.mouseMm]).toEqual([120, 5000]);
+    const b = absorb(a, { keys: 120, mouse_mm: 5000 }, { keys: 150, mouse_mm: 5400.7 });
+    expect([b.keys, b.mouseMm]).toEqual([150, 5400]);
+    // ничего не нажимали — тот же объект
+    expect(absorb(b, { keys: 150, mouse_mm: 5400 }, { keys: 150, mouse_mm: 5400 })).toBe(b);
+    // счёт начался заново — новые итоги целиком, а не минус
+    const c = absorb(b, { keys: 150, mouse_mm: 5400 }, { keys: 7, mouse_mm: 10 });
+    expect([c.keys, c.mouseMm]).toEqual([157, 5410]);
+    // мусор не портит
+    expect(absorb(b, null, { keys: NaN, mouse_mm: -3 })).toBe(b);
+  });
+
+  it('ввод — в разделе «За компьютером» и переживает перезапуск', () => {
+    const s = { ...fresh(NOW), keys: 64200, mouseMm: 3_470_000 };
+    const rows = groups(s, NOW).find((g) => g.title === 'За компьютером')!.rows;
+    expect(rows.map((r) => r.value)).toEqual(['64 200', '≈3,4 км']);
+    expect(load(save(s), NOW).keys).toBe(64200);
   });
 });

@@ -6,14 +6,17 @@
   import { Placer } from './lib/fall';
   import { t } from './lib/i18n';
   import type { MenuItem } from './lib/menu';
+  import { giftFrame, giftMask } from './lib/giftArt';
   import { bedFrame, bedMask, draw, litterFrame, litterMask, SIZE, type Frame } from './lib/sprite';
 
   // Окно вещи на полу — лежака или лотка; какой именно, говорит метка окна. События те же,
   // что у миски, с именем вещи: `bed`, `bed-drop`, `bed-grab`, `bed-hello` (и `litter-…`).
   // У лотка ещё ПКМ-меню: выбор уходит кошке событием `litter-scoop` или `litter-change`.
+  // Подарок (мышка на 100 дней) — тоже вещь: ПКМ «Принять» или «Убрать» — `gift-accept`, `gift-remove`.
   const SPRITES: Record<string, [(s: ThingState) => Frame, (f: Frame) => number[]]> = {
     bed: [bedFrame, bedMask],
     litter: [(s) => litterFrame(s.clumps, s.wear), litterMask],
+    gift: [giftFrame, giftMask],
   };
   const me = getCurrentWebviewWindow();
   const name = me.label in SPRITES ? me.label : 'bed';
@@ -29,6 +32,8 @@
     /** Только у лотка: комочков в наполнителе и насколько он старый. */
     clumps?: number;
     wear?: number;
+    /** Только у подарка: принят и лежит трофеем (иначе — ждёт, примут ли). */
+    kept?: boolean;
   }
 
   const NO_MASK: number[] = Array(SIZE).fill(0);
@@ -65,9 +70,19 @@
     invoke('open_menu', { owner: name, items }).catch(console.error);
   }
 
-  /** ЛКМ тащит вещь; куда она упадёт, решает окно кошки. Щелчок ничего не делает, ПКМ — меню лотка. */
+  /** ПКМ по подарку: принять (пока ждёт) или убрать. Трофей убирают тем же пунктом. */
+  function giftMenu() {
+    const remove: MenuItem = state.kept
+      ? { id: 'remove', text: t('Убрать подарок', 'Remove the gift'), hint: t('трофея больше не будет', 'the trophy will be gone') }
+      : { id: 'remove', text: t('Убрать подарок', 'Remove the gift'), hint: t('она обидится', "she'll be hurt") };
+    const items: MenuItem[] = state.kept ? [remove] : [{ id: 'accept', text: t('Принять подарок', 'Accept the gift'), hint: t('пусть лежит трофеем', 'keep it as a trophy') }, remove];
+    invoke('open_menu', { owner: name, items }).catch(console.error);
+  }
+
+  /** ЛКМ тащит вещь; куда она упадёт, решает окно кошки. Щелчок ничего не делает, ПКМ — меню лотка или подарка. */
   async function poke(e: PointerEvent) {
     if (e.button === 2 && name === 'litter' && state.on) return openMenu();
+    if (e.button === 2 && name === 'gift' && state.on) return giftMenu();
     if (e.button !== 0) return;
     let drop: { x: number; bottom: number } | null = null;
     try {
@@ -89,9 +104,9 @@
       const { on, x, bottom, fall } = state;
       if (on && x !== null && bottom !== null) placer.go({ x, bottom }, fall);
     });
-    // выбор в меню лотка Rust шлёт окну-владельцу, то есть сюда
+    // выбор в меню лотка или подарка Rust шлёт окну-владельцу, то есть сюда
     const unpick = me.listen<{ id: string }>('menu-pick', (e) => {
-      if (e.payload.id === 'scoop' || e.payload.id === 'change') emitTo('pet', `${name}-${e.payload.id}`).catch(console.error);
+      if (['scoop', 'change', 'accept', 'remove'].includes(e.payload.id)) emitTo('pet', `${name}-${e.payload.id}`).catch(console.error);
     });
     // вещь выдернули из-под кошки (лежак — проснётся, лоток — передумает); слушаем своим окном: Rust шлёт сюда
     const ungrab = me.listen('drag-start', () => {

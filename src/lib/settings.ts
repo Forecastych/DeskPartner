@@ -77,6 +77,13 @@ export type Chatter = (typeof CHATTER)[number];
 export const HUNTER_AREAS = ['taskbar', 'screen'] as const;
 export type HunterArea = (typeof HUNTER_AREAS)[number];
 
+/**
+ * Окрас кошки, у каждого свой характер (breed.ts) и палитра (coat.ts). Серая полосатая — та,
+ * что была всегда, по умолчанию: у неё все черты ровно 1.
+ */
+export const BREEDS = ['tabby', 'ginger', 'black', 'tuxedo', 'calico'] as const;
+export type Breed = (typeof BREEDS)[number];
+
 /** Длиннее имя не влезет в облачко и меню трея. */
 export const NAME_MAX = 20;
 
@@ -98,6 +105,10 @@ export function cleanName(v: unknown): string {
   return [...v.replace(/\p{Cc}/gu, '').replace(/\s+/g, ' ').trim()].slice(0, NAME_MAX).join('').trim();
 }
 
+/** Форма питомца после месяца вместе (src/lib/growth.ts): малыш, подросток или взрослая. */
+export const FORMS = ['kitten', 'teen', 'adult'] as const;
+export type Form = (typeof FORMS)[number];
+
 export interface Settings {
   /** Язык интерфейса; «auto» — как в Windows. Смена перезапускает программу (i18n.ts). */
   lang: LangPref;
@@ -118,6 +129,8 @@ export interface Settings {
   yarn: boolean;
   /** Пока только кошка; собака и дракон позже. */
   pet: 'cat';
+  /** Окрас и вместе с ним характер. */
+  breed: Breed;
   topics: Topic[];
   mode: Mode;
   chatter: Chatter;
@@ -129,8 +142,24 @@ export interface Settings {
   reviews: boolean;
   /** Ключ TMDB вводит человек: свой ключ в открытый код не кладём. */
   tmdbKey: string;
+  /** «Новости любимых игр»: анонсы Steam для игр, в которые играешь (наружу — только номер игры в Steam). */
+  gameNews: boolean;
+  /** «Новые серии»: расписание из AniList для тайтлов из `animeTitles` (наружу — сам список). */
+  anime: boolean;
+  /** Названия или ссылки Shikimori / MyAnimeList / AniList через запятую. */
+  animeTitles: string;
   /** Раз в несколько часов спрашивать GitHub, нет ли версии новее (src-tauri/src/update.rs). Ставит всё равно человек. */
   updates: boolean;
+  /** Как выглядит питомец, когда выбор формы открыт; до этого не действует. Меняет только внешность. */
+  form: Form;
+}
+
+/** Длина строки тайтлов: десяток ссылок с запасом. */
+export const ANIME_TITLES_MAX = 1000;
+
+/** Что отдать команде releases_setup: выключенное — пустой список. */
+export function releasesSetup(s: Settings): { steam: boolean; anime: string } {
+  return { steam: s.gameNews, anime: s.anime ? s.animeTitles.trim() : '' };
 }
 
 export function defaults(): Settings {
@@ -146,6 +175,7 @@ export function defaults(): Settings {
     // клубок тихий — не носится и не мешает, поэтому включён сразу
     yarn: true,
     pet: 'cat',
+    breed: 'tabby',
     topics: [],
     mode: 'calm',
     chatter: 'sometimes',
@@ -153,8 +183,12 @@ export function defaults(): Settings {
     sites: false,
     reviews: false,
     tmdbKey: '',
+    gameNews: false,
+    anime: false,
+    animeTitles: '',
     // без обновлений исправления до людей не доедут; спрашиваем только версию, ставим по клику
     updates: true,
+    form: 'adult',
   };
 }
 
@@ -187,6 +221,7 @@ export function parse(raw: string | null): Settings {
     hunterArea: oneOf(HUNTER_AREAS, s.hunterArea, d.hunterArea),
     yarn: bool(s.yarn, d.yarn),
     pet: 'cat',
+    breed: oneOf(BREEDS, s.breed, d.breed),
     topics: Array.isArray(s.topics) ? TOPICS.filter((t) => (s.topics as unknown[]).includes(t)) : d.topics,
     mode: oneOf(MODES, s.mode, d.mode),
     chatter: oneOf(CHATTER, s.chatter, d.chatter),
@@ -194,7 +229,11 @@ export function parse(raw: string | null): Settings {
     sites: bool(s.sites, d.sites),
     reviews: bool(s.reviews, d.reviews),
     tmdbKey: typeof s.tmdbKey === 'string' ? s.tmdbKey.trim() : d.tmdbKey,
+    gameNews: bool(s.gameNews, d.gameNews),
+    anime: bool(s.anime, d.anime),
+    animeTitles: typeof s.animeTitles === 'string' ? s.animeTitles.trim().slice(0, ANIME_TITLES_MAX) : d.animeTitles,
     updates: bool(s.updates, d.updates),
+    form: oneOf(FORMS, s.form, d.form),
   };
 }
 

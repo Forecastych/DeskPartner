@@ -9,6 +9,7 @@
   import { LANG_PREFS, t, type LangPref } from './lib/i18n';
   import { defaults, parse, serialize, type Settings } from './lib/settings';
   import { dirHint, errorText, isDriveRoot, pickDir, samePath } from './lib/setup';
+  import FormSlider from './FormSlider.svelte';
   import NewsFeeds from './NewsFeeds.svelte';
   import SettingsFields from './SettingsFields.svelte';
   import { Button, Dialog, Group, Hint, Radio, Section, TextInput } from './ui';
@@ -56,10 +57,13 @@
     load();
     const off = win.listen<Settings>('settings', (e) => {
       fromPet = true;
-      // галочка в меню кошки; ключ, который человек сейчас печатает, не стираем
-      const draft = document.activeElement?.id === 'tmdb' ? settings.tmdbKey : null;
+      // галочка в меню кошки; ключ или тайтлы, которые человек сейчас печатает, не стираем
+      const focus = document.activeElement?.id;
+      const key = focus === 'tmdb' ? settings.tmdbKey : null;
+      const titles = focus === 'anime' ? settings.animeTitles : null;
       Object.assign(settings, parse(serialize(e.payload)));
-      if (draft !== null) settings.tmdbKey = draft;
+      if (key !== null) settings.tmdbKey = key;
+      if (titles !== null) settings.animeTitles = titles;
     });
     // Закрыли окно, пока фокус в поле ключа: change уже не придёт — дописываем сами
     const offClose = win.onCloseRequested(async () => {
@@ -95,12 +99,16 @@
   /** Любое поле поменялось (change всплывает из SettingsFields). Ключ TMDB приходит сюда по уходу с поля. */
   function changed() {
     settings.tmdbKey = settings.tmdbKey.trim();
+    settings.animeTitles = settings.animeTitles.trim();
     save();
   }
 
   /** Ключ печатают: сохранить, когда пальцы остановятся. Само поле не трогаем — каретка не прыгнет. */
   function typed(e: Event) {
-    if ((e.target as HTMLElement | null)?.id !== 'tmdb') return;
+    const id = (e.target as HTMLElement | null)?.id;
+    // форму — сразу, пока тянут ползунок: питомец меняется под ним
+    if (id === 'form') return save();
+    if (id !== 'tmdb' && id !== 'anime') return;
     clearTimeout(keyTimer);
     keyTimer = setTimeout(save, KEY_SAVE_MS);
   }
@@ -108,7 +116,7 @@
   function save() {
     clearTimeout(keyTimer);
     keyTimer = undefined;
-    const s: Settings = { ...$state.snapshot(settings), tmdbKey: settings.tmdbKey.trim() };
+    const s: Settings = { ...$state.snapshot(settings), tmdbKey: settings.tmdbKey.trim(), animeTitles: settings.animeTitles.trim() };
     queue = queue.then(() => persist(s));
   }
 
@@ -212,7 +220,7 @@
   {/snippet}
 
   <!-- change всплывает от любого поля: так автосохранению не нужно знать, какие поля есть.
-       input — только ради ключа TMDB, см. typed -->
+       input — ради ключа TMDB и ползунка формы, см. typed -->
   <div onchange={changed} oninput={typed}>
     <Section title={t('Язык · Language', 'Language · Язык')}>
       <Group legend={t('Язык интерфейса', 'Interface language')}>
@@ -231,6 +239,7 @@
 
     <Section title={t('Питомец и темы', 'Pet and topics')} rule>
       <SettingsFields bind:settings part="pet" disabled={!loaded || moving} />
+      <FormSlider bind:form={settings.form} disabled={!loaded || moving} />
     </Section>
 
     <Section title={t('Главные галочки', 'Main switches')} rule>

@@ -10,6 +10,7 @@
 // 1–3 часа чистого времени очередная реплика становится фактом. В работу — только рабочие темы,
 // и то реже. Погладили вскоре после факта — тема в почёте, отмахнулись — звучит реже.
 
+import { talkRange } from './breed';
 import { FACTS } from './facts';
 import { pick, type Lang } from './i18n';
 import type { Chatter, Topic } from './settings';
@@ -143,9 +144,9 @@ const LINES: Record<Lang, Lines> = {
   },
 };
 
-export function fresh(now: number, level: Chatter, rand: () => number): Talk {
+export function fresh(now: number, level: Chatter, rand: () => number, talky = 1): Talk {
   return {
-    next: now + interval(level, 0, rand),
+    next: now + interval(level, 0, rand, talky),
     spoke: 0,
     shooed: 0,
     last: '',
@@ -175,10 +176,14 @@ export function topicAdded(t: Talk, now: Date, rand: () => number): Talk {
   return { ...t, factIn: Math.min(t.factIn, soon) };
 }
 
-/** Между репликами: случайно в пределах уровня, растянуто отмахиваниями. Молчуну — никогда. */
-export function interval(level: Chatter, shooed: number, rand: () => number): number {
-  const r = RANGES[level];
-  if (!r) return Infinity;
+/**
+ * Между репликами: случайно в пределах уровня, растянуто отмахиваниями. Молчуну — никогда.
+ * `talky` — разговорчивость окраса (breed.ts): чаще нижней границы уровня не заговорит.
+ */
+export function interval(level: Chatter, shooed: number, rand: () => number, talky = 1): number {
+  const range = RANGES[level];
+  if (!range) return Infinity;
+  const r = talkRange(range, talky);
   return (r[0] + rand() * (r[1] - r[0])) * Math.min(1 + shooed * SHOO_STRETCH, SHOO_MAX);
 }
 
@@ -272,7 +277,7 @@ function weigh(w: Record<string, number>, topic: string, k: number): Record<stri
  * Голод — по делу, его скажет и молчун. Забота и похвала — как только пора, но не чаще GAP_MS.
  * Остальное — когда подошёл случайный срок; срок подошёл, а человек занят — ждёт паузы.
  */
-export function say(talk: Talk, m: Moment, level: Chatter, rand: () => number): [Talk, Line | null] {
+export function say(talk: Talk, m: Moment, level: Chatter, rand: () => number, talky = 1): [Talk, Line | null] {
   const now = m.now.getTime();
   let t = talk;
   if (m.session < t.session) t = { ...t, inSession: [] };
@@ -305,7 +310,7 @@ export function say(talk: Talk, m: Moment, level: Chatter, rand: () => number): 
   if (!line) return [t, null];
 
   const text = fill(line.text, m);
-  t = { ...t, spoke: now, last: line.text, next: now + interval(level, t.shooed, rand), topic: '' };
+  t = { ...t, spoke: now, last: line.text, next: now + interval(level, t.shooed, rand, talky), topic: '' };
   if (told) t = { ...t, told, factIn: factGap(rand), topic: line.key.slice('fact:'.length) };
   if (line.key === 'hungry') t.hungryAt = now;
   if (line.key === 'care' || line.key === 'praise') t.inSession = [...t.inSession, line.key];
@@ -322,9 +327,9 @@ export function shownFor(text: string): number {
  * Облачко смахнули кликом: следующая реплика — позже, и с каждым разом подряд ещё позже.
  * Смахнули факт — его тема звучит реже.
  */
-export function shoo(t: Talk, level: Chatter, rand: () => number): Talk {
+export function shoo(t: Talk, level: Chatter, rand: () => number, talky = 1): Talk {
   const shooed = t.shooed + 1;
-  const s = { ...t, shooed, next: t.spoke + interval(level, shooed, rand) };
+  const s = { ...t, shooed, next: t.spoke + interval(level, shooed, rand, talky) };
   return t.topic ? { ...s, topic: '', weights: weigh(t.weights, t.topic, WEIGHT_DOWN) } : s;
 }
 
@@ -346,8 +351,8 @@ export function vote(t: Talk, topic: string, up: boolean): Talk {
 }
 
 /** Уровень сменили в настройках — срок пересчитываем от последней реплики (или от сейчас). */
-export function retime(t: Talk, level: Chatter, now: number, rand: () => number): Talk {
-  return { ...t, next: (t.spoke || now) + interval(level, t.shooed, rand) };
+export function retime(t: Talk, level: Chatter, now: number, rand: () => number, talky = 1): Talk {
+  return { ...t, next: (t.spoke || now) + interval(level, t.shooed, rand, talky) };
 }
 
 /**
@@ -359,7 +364,7 @@ export function save(t: Talk): string {
 }
 
 /** Старые сохранения — без полей фактов: тогда срок факта новый, сказанного нет, веса ровные. */
-export function load(raw: string | null, now: number, level: Chatter, rand: () => number): Talk {
+export function load(raw: string | null, now: number, level: Chatter, rand: () => number, talky = 1): Talk {
   const t = fresh(now, level, rand);
   try {
     const s = JSON.parse(raw ?? '{}');
@@ -380,7 +385,7 @@ export function load(raw: string | null, now: number, level: Chatter, rand: () =
       factIn,
       told,
       weights,
-      next: now + interval(level, shooed, rand),
+      next: now + interval(level, shooed, rand, talky),
     };
   } catch {
     return t;

@@ -22,6 +22,10 @@ struct Text {
     text: String,
     /// Новость: под текстом кнопки «больше такого / меньше такого».
     vote: bool,
+    /// Надпись кнопки-действия под текстом («Лазер» после помодоро); нет — кнопки нет.
+    act: Option<String>,
+    /// Вышел патч или серия: вместо голоса — «Глянем» (открыть ссылку) и «Мимо».
+    link: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -65,9 +69,10 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 }
 
 /// Сказать `text` над точкой (`x`, `top`) — серединой и макушкой питомца. Прежняя реплика пропадает.
-/// `vote` — это новость, под ней кнопки лайк/диз.
+/// `vote` — это новость, под ней кнопки лайк/диз; `link` — патч или серия, под ними «Глянем»/«Мимо»;
+/// `act` — надпись кнопки-действия под текстом.
 #[tauri::command]
-pub async fn say(app: AppHandle, text: String, x: i32, top: i32, vote: Option<bool>) -> Result<(), String> {
+pub async fn say(app: AppHandle, text: String, x: i32, top: i32, vote: Option<bool>, link: Option<bool>, act: Option<String>) -> Result<(), String> {
     let w = window(&app)?;
     let hwnd = sys::hwnd(&w)?;
     let gen = {
@@ -81,7 +86,8 @@ pub async fn say(app: AppHandle, text: String, x: i32, top: i32, vote: Option<bo
         s.gen
     };
     let vote = vote.unwrap_or(false);
-    w.emit_to(LABEL, "bubble-text", Text { gen, text, vote }).map_err(|e| e.to_string())
+    let link = link.unwrap_or(false);
+    w.emit_to(LABEL, "bubble-text", Text { gen, text, vote, link, act }).map_err(|e| e.to_string())
 }
 
 /// Окно облачка измерило себя: `width`×`height` — физические пиксели. Ставим и показываем.

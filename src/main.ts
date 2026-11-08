@@ -22,6 +22,7 @@ const views: Record<string, Component> = {
   bowl: Bowl,
   bed: Thing,
   litter: Thing,
+  gift: Thing,
   setup: Setup,
   settings: Settings,
   stats: Stats,

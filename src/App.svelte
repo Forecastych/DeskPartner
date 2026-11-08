@@ -13,13 +13,23 @@
   import * as revenge from './lib/revenge';
   import * as litter from './lib/litter';
   import * as fly from './lib/fly';
+  import * as gift from './lib/gift';
+  import { withMouse } from './lib/giftArt';
   import * as roam from './lib/roam';
   import * as news from './lib/news';
-  import { parse, serialize, TOPICS, type Chatter, type HunterArea, type Settings, type Topic } from './lib/settings';
+  import * as rel from './lib/releases';
+  import { parse, releasesSetup, serialize, TOPICS, type Breed, type Chatter, type Form, type HunterArea, type Settings, type Topic } from './lib/settings';
+  import { playGap, traits } from './lib/breed';
+  import { paint, palette } from './lib/coat';
   import * as sleepy from './lib/sleep';
+  import * as pomodoro from './lib/pomodoro';
+  import { focusFrame } from './lib/hourglass';
   import * as tally from './lib/stats';
+  import * as diary from './lib/diary';
   import * as chrono from './lib/chrono';
   import * as holidays from './lib/holidays';
+  import * as awards from './lib/awards';
+  import * as growing from './lib/growth';
   import { ANIMS, BOWL_AT, BOWL_X, bowlLeft, draw, dress, fatOn, flip, ground, hitMask, onBowl, SCRUFF_AT, SIZE, type AnimName, type Frame } from './lib/sprite';
   import { localLegacy, memoryStore, open, tauriBackend, type Store } from './lib/store';
   import * as wiki from './lib/wiki';
@@ -68,6 +78,8 @@
   const CRUNCH_MS = 3000;
   /** Праздник: столько сидит у тортика. */
   const CAKE_MS = 8000;
+  /** Пока идёт момент роста, кадр перерисовывается так часто: мерцание стадий учащается к концу. */
+  const GROW_TICK_MS = 50;
   /** От батареи устаёт во столько раз быстрее: бережёт заряд и спит чаще. */
   const BATTERY_TIRED = 1.5;
   /** Полки внутри окон перечитываются не чаще: детей у окон много, а мышь бегает долго. */
@@ -120,6 +132,10 @@
     call?: boolean;
     /** Только в Windows: ноутбук работает от батареи. */
     battery?: boolean;
+    /** Нажатия и путь мыши с запуска программы — для статистики и достижений. */
+    input?: tally.Input;
+    /** Активное окно — игра (news/releases.rs): про её патчи — потом, в паузу. */
+    game?: boolean;
   }
 
   /** Файлы в папке, выбранной на первом запуске; до открытия — память, чтобы не ловить null. */
@@ -165,8 +181,19 @@
   let frozen = false;
   let belly: Belly = fresh();
   let nap: sleepy.Sleep = sleepy.fresh();
+  /** Помодоро: фокус, потягушки, перерыв (pomodoro.ts); null — не идёт. Живёт только в памяти. */
+  let focus: pomodoro.Pomodoro | null = null;
   /** Копится за всю жизнь программы (lib/stats); питомец сбежал — цифры остаются. */
   let stats = tally.fresh(Date.now());
+  /** Срез сегодняшнего дня и записи дневника (lib/diary); null — хранилище ещё не открыто. */
+  let today: diary.Day | null = null;
+  let pages: diary.Facts[] = [];
+  /** Достижения и наряд за них (lib/awards): полученное не отнимается. */
+  let prize = awards.fresh();
+  /** Итоги ввода на прошлом опросе: в статистику идёт разница. null — ещё не опрашивали. */
+  let lastInput: tally.Input | null = null;
+  /** Память загружена: до этого ввод не копим, иначе загрузка затрёт насчитанное. */
+  let loaded = false;
   /** Покормили, а кошка не у миски: сначала дойдёт, потом ест. Корм тем временем лежит в миске. */
   let mealPending = false;
   let lastBowl = '';
@@ -178,6 +205,10 @@
   let carried = false;
   /** Разговорчивость из настроек и что кошка уже наговорила. */
   let chatterLevel: Chatter = 'sometimes';
+  /** Окрас: палитра кадра (coat.ts) и характер (breed.ts). Серая — все черты 1, как было всегда. */
+  let breed: Breed = 'tabby';
+  let coat = palette(breed);
+  const trait = () => traits(breed);
   let talk: chatter.Talk = chatter.fresh(Date.now(), chatterLevel, Math.random);
   /** О чём рассказывать факты; пусто — фактов нет. */
   let topics: Topic[] = [];
@@ -192,10 +223,13 @@
   /**
    * Одна новость про запас, пока её не скажут: news_pick помечает выданное показанным, поэтому
    * берём по одной, а не пачкой. Идёт первой среди фактов своей темы.
+   * С `link` — это не новость, а вышедшее у своего (lib/releases.ts): патч игры или серия.
    */
-  let held: { topic: Topic; text: string; date: number; source: string } | null = null;
-  /** На облачке сейчас новость — под ней лайк/диз; голос пойдёт ей. */
-  let voteFor: { topic: Topic; source: string } | null = null;
+  let held: { topic: Topic; text: string; date: number; source: string; link?: string } | null = null;
+  /** На облачке сейчас новость — под ней лайк/диз; голос пойдёт ей. С `link` — «Глянем» откроет ссылку. */
+  let voteFor: { topic: Topic; source: string; link?: string } | null = null;
+  /** Включены «Новости любимых игр» или «Новые серии аниме». */
+  let releasesOn = false;
   /** Раньше этого за новостью не ходим: запрос в пути или новостей не было. */
   let newsNext = 0;
   /** Облачко висит до этих пор; 0 — молчит. */
@@ -238,6 +272,14 @@
   let crunchUntil = 0;
   /** До этих пор празднует у тортика. */
   let cakeUntil = 0;
+  /** Рост (growth.ts): стадия, которую человек видел, и открыт ли выбор формы; форма — из настроек. */
+  let growth = growing.fresh();
+  let form: Form = 'adult';
+  /** Момент роста: когда начался (0 — нет), какой, по каким стадиям и сказала ли уже. */
+  let growAt = 0;
+  let growKind: growing.Moment = 'grow';
+  let growPath: growing.Stage[] = [];
+  let growSaid = false;
   /** «Муху съела» (fly.ts): когда началась сценка (0 — нет), когда была прошлая, о какой стадии уже сказала. */
   let flyAt = 0;
   let lastFly = 0;
@@ -295,6 +337,12 @@
   let potty: litter.Visit | null = null;
   let nextPotty = 0;
   let pottyNow = false;
+  /** Подарок на 100 дней (gift.ts): дарила ли и где лежит; сценка (null — нет); упал; подарок из трея dev-сборки. */
+  let present = gift.fresh();
+  let giving: gift.Visit | null = null;
+  let giftFall = false;
+  let giftNow = false;
+  let lastGift = '';
   /** Самая важная программа дня по трекеру: спрашиваем, только пока кошка в обиде. */
   let topApp: string | null = null;
   let lastPuddle = '';
@@ -314,13 +362,27 @@
   let lastPlace = '';
   let timer: ReturnType<typeof setTimeout>;
 
+  /** Сутки сменились: вчерашний срез — запись в дневник, новый день — с текущей статистики. */
+  function turnPage(now: number) {
+    const key = chatter.dayKey(new Date(now));
+    if (!today || today.key === key) return;
+    const done = diary.facts(today, stats);
+    if (diary.worth(done)) pages = diary.push(pages, done);
+    today = diary.begin(key, stats);
+    persist(now);
+  }
+
   function persist(now: number) {
     if (frozen) return;
     lastSave = now;
     store.set('belly', save(belly));
     store.set('sleep', sleepy.save(nap));
     store.set('stats', tally.save(stats));
+    if (today) store.set('day', diary.save(today));
+    store.set('diary', diary.saveList(pages));
+    store.set('awards', awards.save(prize));
     store.set('revenge', revenge.save(grudge));
+    store.set('growth', growing.save(growth));
     store.set('talk', chatter.save(talk));
     if (pet) store.set('spot', JSON.stringify(roam.spotOf(pet)));
     // окно-опору не храним: после перезапуска у окон другие hwnd — вещь найдёт рамку по точке
@@ -328,6 +390,7 @@
     if (bedPlace) store.set('bed', JSON.stringify({ x: Math.round(bedPlace.x), y: Math.round(bedPlace.y) }));
     // у лотка рядом с местом — что в нём; места нет (стоит по умолчанию) — только содержимое
     store.set('litter', JSON.stringify({ ...(litterPlace && { x: Math.round(litterPlace.x), y: Math.round(litterPlace.y) }), ...box }));
+    store.set('gift', gift.save(present));
   }
 
   /** Где стоит вещь — в координаты окна для place_pet; мира нет — null, окно стоит, где стояло. */
@@ -348,6 +411,8 @@
     if (bedPlace && bed) [bedFall, bedPlace] = [bedFall || fell(bedPlace, bed), bed];
     const tray = litterPlace && roam.litterAt(world, litterPlace);
     if (litterPlace && tray) [litterFall, litterPlace] = [litterFall || fell(litterPlace, tray), tray];
+    const prey = present.place && gift.lying(present) ? roam.giftAt(world, present.place) : null;
+    if (present.place && prey) [giftFall, present] = [giftFall || fell(present.place, prey), gift.moved(present, prey)];
   }
 
   /**
@@ -388,19 +453,33 @@
     emitTo('litter', 'litter', { on: litterOn, ...at, fall, clumps: box.clumps, wear }).catch(console.error);
   }
 
-  /** Миску, лежак или лоток перетащили и бросили: падает на ближайшую рамку окна под собой или на пол. */
-  function putDown(thing: 'bowl' | 'bed' | 'litter', x: number, bottom: number) {
-    const settle = thing === 'bowl' ? roam.bowlAt : thing === 'bed' ? roam.bedAt : roam.litterAt;
+  /** Окно подарка: лежит — там, где положила или куда перетащили; принят — трофей; нет — пустое и сквозное. */
+  function tellGift() {
+    const on = gift.lying(present);
+    const at = windowAt(world && on ? roam.giftAt(world, present.place) : null);
+    const fall = giftFall;
+    giftFall = false;
+    const kept = present.state === 'kept';
+    const key = `${on} ${at.x} ${at.bottom} ${kept}`;
+    if (key === lastGift) return;
+    lastGift = key;
+    emitTo('gift', 'gift', { on, ...at, fall, kept }).catch(console.error);
+  }
+
+  /** Миску, лежак, лоток или подарок перетащили и бросили: падает на ближайшую рамку окна под собой или на пол. */
+  function putDown(thing: 'bowl' | 'bed' | 'litter' | 'gift', x: number, bottom: number) {
+    const settle = thing === 'bowl' ? roam.bowlAt : thing === 'bed' ? roam.bedAt : thing === 'litter' ? roam.litterAt : roam.giftAt;
     const place = world && settle(world, { x, y: bottom });
     if (place) {
       // окно вещи осталось там, где отпустили: оттуда и падает
       if (thing === 'bowl') [bowlPlace, bowlFall] = [place, true];
       else if (thing === 'bed') [bedPlace, bedFall] = [place, true];
-      else [litterPlace, litterFall] = [place, true];
+      else if (thing === 'litter') [litterPlace, litterFall] = [place, true];
+      else [present, giftFall] = [gift.moved(present, place), true];
       persist(Date.now());
     }
     // бросили туда же, откуда взяли, — ключ не сменился, а окно надо вернуть на опору
-    lastBowl = lastBed = lastLitter = '';
+    lastBowl = lastBed = lastLitter = lastGift = '';
     render();
   }
 
@@ -549,8 +628,9 @@
       peekPending = false;
       filmScreen = null;
     }
-    // уснула до фильма или в первые секунды сеанса — кино её будит, без обид; нудное — пусть спит
-    if (film.active && filmVerdict !== 'dull' && sleepy.mood(nap) === 'asleep' && !carried) {
+    // уснула до фильма или в первые секунды сеанса — кино её будит, без обид; нудное — пусть спит.
+    // На таймере фокуса — спит при любом кино
+    if (film.active && filmVerdict !== 'dull' && sleepy.mood(nap) === 'asleep' && !carried && !pomodoro.focusing(focus)) {
       nap = sleepy.stir(nap);
       sleepPose = null;
       persist(now);
@@ -596,12 +676,14 @@
    * Выспавшаяся проснулась и умывается; не доспавшая вялая, злая, а на третий раз уходит за край.
    */
   function disturb(now: number): boolean {
+    // на таймере фокуса не будят ни клик, ни тряска, ни руки — и обид за это нет
+    if (pomodoro.focusing(focus)) return false;
     const [next, result] = sleepy.poke(nap);
     if (!result) return false;
     nap = next;
     sleepPose = null;
     // не доспавшая может затаить обиду (revenge.ts: шанс зависит от того, как разбудили)
-    grudge = revenge.provoke(grudge, result, now, Math.random, mode);
+    grudge = revenge.provoke(grudge, result, now, Math.random, mode, trait().touchy);
     stats.woken++;
     if (result === 'wake') groomUntil = now + GROOM_MS;
     // 'leave' — за край она уйдёт сама: это заметит live()
@@ -623,14 +705,22 @@
     belly = next;
     if (event === 'gone') stats.runaways++;
     stats = tally.tick(stats, dt, !away(), film.active, humanIdle ? -1 : new Date(now).getHours());
-    if (event === 'eat') serve(now);
+    if (today) today = diary.tick(today, dt, { app: senses?.app, human: !humanIdle, asleep: nap.asleep });
+    turnPage(now);
+    // кормушка сработала посреди фокуса — поест на перерыве, а пока спит
+    if (event === 'eat' && pomodoro.focusing(focus)) mealPending = true;
+    else if (event === 'eat') serve(now);
     // поела где-то там
     if (event === 'return') comeBack(now);
 
     // пока смотрит кино, сама не устаёт: когда уснуть на фильме, решает movie.ts. Видео уже
     // играет, но сеанс ещё не засчитан (START_MS) — тоже: иначе успеет уйти спать на лежак
     const watching = filming() && sleepy.mood(nap) === 'awake';
-    const [rested, mood] = watching ? [nap, null] : sleepy.step(nap, dt, humanIdle, tired());
+    // на таймере фокуса засыпает, как только освободится, и спит до конца (pomodoro.ts); ушедшая
+    // за край досыпает по своим часам и, вернувшись, засыпает уже на таймере
+    const timed = pomodoro.focusing(focus) && sleepy.mood(nap) !== 'away';
+    if (timed && !carried && !busy() && !mouse.owns(hunt) && !yarn.owns(game) && now >= eatUntil) nap = pomodoro.lull(nap);
+    const [rested, mood] = watching ? [nap, null] : timed ? [pomodoro.doze(nap, dt), null] : sleepy.step(nap, dt, humanIdle, tired(), trait().sleepy);
     nap = rested;
     if (mood === 'sleep') {
       stats.naps++;
@@ -645,6 +735,21 @@
       // выспалась за краем посреди фильма — досматривает
       if (filmNap) film = movie.awake(film);
       filmNap = false;
+    }
+
+    // фокус кончился — просыпается выспавшейся и потягивается; облачко «Перерыв!» — в breakTime()
+    const [clock, ring] = pomodoro.step(focus, now);
+    focus = clock;
+    if (ring === 'done') {
+      if (sleepy.mood(nap) === 'asleep') nap = sleepy.stir(nap);
+      sleepPose = null;
+      stats.focuses++;
+      invoke('set_focus', { until: 0 }).catch(console.error);
+    }
+    // корм из кормушки дождался перерыва: у миски ест сразу, иначе дойдёт сама (move)
+    if (ring === 'stretched' && mealPending && atBowl()) {
+      mealPending = false;
+      meal(now);
     }
 
     // Уход и возвращение сверяются с голодом и сном каждый кадр, а не только по событиям:
@@ -665,7 +770,7 @@
       else bedBound = false;
     }
 
-    if (event || mood || now - lastSave >= SAVE_MS) persist(now);
+    if (event || mood || ring === 'done' || now - lastSave >= SAVE_MS) persist(now);
   }
 
   /**
@@ -689,6 +794,7 @@
   function canHunt(now: number): boolean {
     return (
       hunterOn &&
+      !onTimer() &&
       !bossed &&
       !!pet &&
       !!world &&
@@ -707,6 +813,7 @@
   function canYarn(now: number): boolean {
     return (
       yarnOn &&
+      !onTimer() &&
       !bossed &&
       !!pet &&
       !!world &&
@@ -730,6 +837,7 @@
   function canRevenge(now: number): boolean {
     const mood = sleepy.mood(nap);
     return (
+      !onTimer() &&
       !!pet &&
       !!world &&
       !carried &&
@@ -742,6 +850,7 @@
       !hunt &&
       !game &&
       !litter.owns(potty) &&
+      !gift.owns(giving) &&
       // кино смотрят вместе: на сеансе не мстит
       !filming() &&
       now >= eatUntil &&
@@ -755,6 +864,7 @@
   function canPotty(now: number): boolean {
     return (
       litterOn &&
+      !onTimer() &&
       !bossed &&
       !!pet &&
       !!world &&
@@ -766,13 +876,52 @@
       sleepy.mood(nap) === 'awake' &&
       now >= eatUntil &&
       !revenge.owns(payback) &&
+      !gift.owns(giving) &&
       !hunt &&
       !game
     );
   }
 
-  /** Кошкой правит своё дело — месть или лоток: к миске, в лежак и играть пойдёт потом. */
-  const busy = (): boolean => revenge.owns(payback) || litter.owns(potty);
+  /**
+   * Сценка подарка идёт: дома, бодрая, не ест, не в руках, лазер не светит, без кино, мести, лотка
+   * и игр, мешать можно (не «не мешать», не созвон, не босс). Перестало так быть — сценку бросает.
+   */
+  function canGift(now: number): boolean {
+    return (
+      !bossed &&
+      !!pet &&
+      !!world &&
+      !carried &&
+      !holding &&
+      dot === null &&
+      !pet.hunt &&
+      !filming() &&
+      !away() &&
+      sleepy.mood(nap) === 'awake' &&
+      now >= eatUntil &&
+      !revenge.owns(payback) &&
+      !litter.owns(potty) &&
+      !mouse.owns(hunt) &&
+      !yarn.owns(game) &&
+      !onTimer() &&
+      unbothered()
+    );
+  }
+
+  /** Подарок дарить пора: раз за жизнь, с GIFT_AT вместе (или из трея), человек не печатает — на паузе или отошёл. */
+  function giftTime(now: number): boolean {
+    if (!pet || !senses || giving || speakingUntil || flyAt || !(giftNow || gift.due(present, stats.together)) || !canGift(now)) return false;
+    if (giftNow) return pet.move !== 'out';
+    return idle(now) && !senses.typing && (moment(now, senses).pause || humanIdle);
+  }
+
+  /** Убрали подарок, и она уже идёт за ним, уносит или ест: меню подарка ничего не меняет. */
+  const taking = (): boolean => gift.owns(giving) && (giving!.phase === 'take' || giving!.phase === 'carry' || giving!.phase === 'eat');
+
+  /** Кошкой правит своё дело — месть, лоток или подарок: к миске, в лежак и играть пойдёт потом. */
+  const busy = (): boolean => revenge.owns(payback) || litter.owns(potty) || gift.owns(giving);
+  /** Фокус или потягушки после него: ничего не затевает — ни игр, ни шалостей, ни лотка. */
+  const onTimer = (): boolean => !!focus && focus.phase !== 'break';
 
   /** Можно ли мстить сейчас: «Шалости» (или трей dev-сборки), «не мешать» нет, созвона нет. */
   const gate = (): revenge.Gate => ({ mode: revengeNow ? 'pranks' : mode, quiet: quietNow(), call: senses?.call });
@@ -805,12 +954,14 @@
       now >= poseUntil &&
       now >= crunchUntil &&
       now >= cakeUntil &&
-      !flyAt
+      !flyAt &&
+      !growAt
     );
   }
 
-  const huntGap = () => HUNT_MIN + Math.random() * (HUNT_MAX - HUNT_MIN);
-  const yarnGap = () => YARN_MIN + Math.random() * (YARN_MAX - YARN_MIN);
+  // игривая зовёт играть чаще, ленивая — реже (breed.ts)
+  const huntGap = () => playGap(HUNT_MIN + Math.random() * (HUNT_MAX - HUNT_MIN), trait().playful);
+  const yarnGap = () => playGap(YARN_MIN + Math.random() * (YARN_MAX - YARN_MIN), trait().playful);
 
   /** Мышь или клубок в окно "mouse": где и что делает; null — спрятать. Шлём только перемены. */
   function tellMouse() {
@@ -847,6 +998,8 @@
     if (pet && payback && revenge.owns(payback)) return revenge.pose(payback, pet);
     // лоток: идёт, сидит, закапывает, носится
     if (pet && potty && litter.owns(potty)) return litter.pose(potty, pet);
+    // подарок: несёт мышь, зовёт посмотреть, сидит рядом, мурлычет; за краем её не видно
+    if (pet && giving && gift.owns(giving)) return gift.pose(giving, pet, now);
     // за мышью за край — бегом, обратно — шагом; за краем её не видно
     if (pet && hunt && mouse.owns(hunt)) {
       if (pet.move === 'out') return null;
@@ -867,10 +1020,14 @@
     const mood = sleepy.mood(nap);
     // «з-з-з» — только из-за края; пока не дошла, идёт
     if (mood === 'away') return pet && pet.move !== 'out' ? 'walk' : 'zzz';
+    // фокус кончился: потягивается, прежде чем что-то ещё
+    if (focus?.phase === 'stretch') return 'stretch';
     if (now < pettedUntil) return 'petted';
     if (now < poseUntil) return 'pose';
     if (now < crunchUntil) return 'crunch';
     if (now < cakeUntil) return 'cake';
+    // момент роста — сидит и «вытягивается» на месте
+    if (growAt) return 'sit';
     if (flyAt) {
       const s = fly.stage(flyAt, now);
       if (s !== 'done') return fly.pose(s);
@@ -880,7 +1037,8 @@
     if (mood === 'angry' || mood === 'groggy') return mood;
     if (mood === 'asleep') {
       if (bedOn && pet && world && roam.atBed(pet, world, bedPlace)) return 'bed';
-      return pet && roam.onStrip(pet) ? 'sleep' : (sleepPose ??= pick(SLEEPS));
+      // на таймере — только калачиком: к нему render() приставит песочные часы
+      return (pet && roam.onStrip(pet)) || pomodoro.focusing(focus) ? 'sleep' : (sleepPose ??= pick(SLEEPS));
     }
     // проснулась голодной — сначала к миске, умыться успеет потом; не дошла — сидит и ждёт пути
     if (isHungry(belly) || mealPending) return atBowl() ? 'hungry' : 'sit';
@@ -971,16 +1129,20 @@
       if (now >= speakingUntil || (!free() && !forced)) hush();
       return;
     }
+    // на таймере и до облачка «Перерыв!» молчит: и болтовня, и «есть хочу» ждут перерыва
+    if (focus && !focus.offered) return;
     // своя реплика у мухи — chatter не перебивает
     if (frozen || !senses || !head || film.active || flyAt) return;
     askWiki(now);
     askNews(now);
-    const [next, line] = chatter.say(talk, moment(now, senses), chatterLevel, Math.random);
+    const [next, line] = chatter.say(talk, moment(now, senses), chatterLevel, Math.random, trait().talky);
     talk = next;
     if (line) speak(line.text, now, held && line.text === held.text ? held : null);
   }
 
   function moment(now: number, s: Senses): chatter.Moment {
+    // вышедшее у своего — не посреди игры: подождёт паузы. Тему держит не список тем, а галочка
+    const tell = held && !(held.link && s.game) ? held : null;
     return {
       now: new Date(now),
       pause: !s.idle && !s.typing && (s.quiet ?? 'no') === 'no',
@@ -988,27 +1150,36 @@
       today: s.active_today_secs,
       hungry: isHungry(belly) && !mealPending,
       free: free(),
-      topics,
+      topics: tell?.link && !topics.includes(tell.topic) ? [...topics, tell.topic] : topics,
       name: petName,
-      extra: held ? { ...wikiFacts, [held.topic]: [held.text, ...(wikiFacts[held.topic] ?? [])] } : wikiFacts,
+      extra: tell ? { ...wikiFacts, [tell.topic]: [tell.text, ...(wikiFacts[tell.topic] ?? [])] } : wikiFacts,
     };
   }
 
   /**
    * Новость по темам: одна про запас. Сказали, тему сняли или новость устарела — берём следующую.
    * В рабочее время — только из рабочих тем: остальное chatter всё равно отложит до вечера.
+   * На отдыхе и не в игре сначала спрашиваем, не вышло ли что у своего: патч игры, серия аниме.
    */
   function askNews(now: number) {
-    const fresh = held && topics.includes(held.topic) && !talk.told.includes(held.text) && now / 1000 - held.date < NEWS_STALE_S;
+    const fresh = held && (!!held.link || topics.includes(held.topic)) && !talk.told.includes(held.text) && now / 1000 - held.date < NEWS_STALE_S;
     if (fresh) return;
     held = null;
     const work = chatter.isWork(new Date(now));
     const allowed = topics.filter((t) => !work || chatter.WORK_TOPICS.includes(t));
-    if (!allowed.length || now < newsNext) return;
+    const releases = releasesOn && !work && !senses?.game;
+    if ((!allowed.length && !releases) || now < newsNext) return;
     newsNext = now + NEWS_RETRY_MS;
-    news.pickNews(invoke, allowed, talk.weights).then((item) => {
-      const topic = TOPICS.find((t) => t === item?.topic);
-      if (item && topic) held = { topic, text: news.newsLine(item), date: item.date, source: item.source };
+    (releases ? rel.pickRelease(invoke) : Promise.resolve(null)).then((r) => {
+      if (r) {
+        held = { topic: rel.releaseTopic(r), text: rel.releaseLine(r), date: Date.now() / 1000, source: rel.releaseSource(r), link: r.link };
+        return;
+      }
+      if (!allowed.length) return;
+      news.pickNews(invoke, allowed, talk.weights).then((item) => {
+        const topic = TOPICS.find((t) => t === item?.topic);
+        if (item && topic) held = { topic, text: news.newsLine(item), date: item.date, source: item.source };
+      });
     });
   }
 
@@ -1029,15 +1200,16 @@
   }
 
   /**
-   * Сказать `text` на `ms`; `about` — это новость, под ней будут лайк/диз. Прежнее облачко
+   * Сказать `text` на `ms`; `about` — это новость, под ней будут лайк/диз; с `link` — «Глянем»/«Мимо». Прежнее облачко
    * `say` убирает сам: отдельный hush перед ним — лишний и опасный, две async-команды приходят
-   * в Rust в любом порядке, и поздний hush гасит только что показанное облачко.
+   * в Rust в любом порядке, и поздний hush гасит только что показанное облачко. `act` — надпись
+   * кнопки-действия под текстом (Bubble.svelte): нажали — придёт bubble-act.
    */
-  function speak(text: string, now: number, about: { topic: Topic; source: string } | null = null, ms = chatter.shownFor(text)) {
+  function speak(text: string, now: number, about: { topic: Topic; source: string; link?: string } | null = null, ms = chatter.shownFor(text), act: string | null = null) {
     if (!head || bossed) return;
     speakingUntil = now + ms;
-    voteFor = about && { topic: about.topic, source: about.source };
-    invoke('say', { text, ...head, vote: !!about }).catch(console.error);
+    voteFor = about && { topic: about.topic, source: about.source, link: about.link };
+    invoke('say', { text, ...head, vote: !!about, link: !!about?.link, act }).catch(console.error);
     stats.said++;
     persist(now);
   }
@@ -1064,17 +1236,25 @@
    */
   function newsNow() {
     if (frozen || !head || away()) return;
-    const show = (text: string, about: { topic: Topic; source: string } | null = null) => {
+    const show = (text: string, about: { topic: Topic; source: string; link?: string } | null = null) => {
       forced = true;
       // после облачка — обычная тишина GAP_MS, чтобы следом не заговорила сама
       talk = { ...talk, spoke: Date.now() };
       speak(text, Date.now(), about);
     };
-    if (!topics.length) return show(t('Тем не выбрано — новостей не будет.', 'No topics chosen, so no news.'));
-    news.pickNews(invoke, topics, talk.weights).then((item) => {
-      const topic = TOPICS.find((t) => t === item?.topic);
-      if (!item || !topic) return show(t('Новостей пока нет: ленты ещё качаются.', 'No news yet: the feeds are still downloading.'));
-      show(news.newsLine(item), { topic, source: item.source });
+    const fromFeeds = () => {
+      if (!topics.length) return show(t('Тем не выбрано — новостей не будет.', 'No topics chosen, so no news.'));
+      news.pickNews(invoke, topics, talk.weights).then((item) => {
+        const topic = TOPICS.find((t) => t === item?.topic);
+        if (!item || !topic) return show(t('Новостей пока нет: ленты ещё качаются.', 'No news yet: the feeds are still downloading.'));
+        show(news.newsLine(item), { topic, source: item.source });
+      });
+    };
+    // патчи и серии — только на отдыхе; в игре Rust ответит null сам
+    if (!releasesOn || chatter.isWork(new Date())) return fromFeeds();
+    rel.pickRelease(invoke).then((r) => {
+      if (!r) return fromFeeds();
+      show(rel.releaseLine(r), { topic: rel.releaseTopic(r), source: rel.releaseSource(r), link: r.link });
     });
   }
 
@@ -1085,7 +1265,7 @@
   function flyBy(now: number) {
     const dt = now - flyCheck;
     flyCheck = now;
-    if (flyAt || bossed || speakingUntil || film.active || !senses || !free() || !idle(now) || !unbothered()) return;
+    if (flyAt || bossed || speakingUntil || film.active || onTimer() || !senses || !free() || !idle(now) || !unbothered()) return;
     if (moment(now, senses).pause && fly.due(lastFly, now, dt, Math.random)) startFly(now);
   }
 
@@ -1124,6 +1304,47 @@
     invoke('hush').catch(console.error);
   }
 
+  /** Облачко сценки подарка: держится, хоть кошка и занята; после него — обычная тишина. */
+  function giftSay(text: string, now: number) {
+    forced = true;
+    talk = { ...talk, spoke: now };
+    speak(text, now);
+  }
+
+  /** Что сценка подарка велела сделать в этот кадр (gift.Cue). */
+  function presented(cue: gift.Cue, now: number) {
+    if (!pet || !world) return;
+    if (cue === 'put') {
+      const at = gift.putAt(world, pet);
+      const g = at && roam.giftAt(world, at);
+      if (!g) return;
+      present = gift.given(g);
+      giftFall = false;
+      persist(now);
+      giftSay(gift.presentLine(), now);
+    } else if (cue === 'took') {
+      present = gift.remove();
+      persist(now);
+    } else if (cue === 'eat') {
+      // за краем головы нет (speak ставит хвостик к макушке): облачко — у края, bubble.rs сам сдвинет его внутрь
+      const m = roam.monitorOf(world, pet);
+      if (!m || bossed) return;
+      const text = gift.chompLine();
+      const x = pet.exit < 0 ? m.work.left + 1 : m.work.right - 1;
+      forced = true;
+      talk = { ...talk, spoke: now };
+      speakingUntil = now + chatter.shownFor(text);
+      voteFor = null;
+      invoke('say', { text, x: Math.round(x), top: Math.round(pet.y - roam.side(m) * 0.6), vote: false }).catch(console.error);
+      stats.said++;
+    } else {
+      // доела — спит за краем, как обиженная; вернётся сама через NAP_MS (live → comeBack)
+      nap = sleepy.bored(nap);
+      sleepPose = null;
+      persist(now);
+    }
+  }
+
   /** Перечитать мониторы и окна. Пустой список (экран блокировки) — мира нет, кошка ждёт на месте. */
   async function survey() {
     if (surveying) return;
@@ -1144,6 +1365,7 @@
       tellBowl();
       tellBed();
       tellLitter();
+      tellGift();
     } catch (e) {
       console.error(e);
     } finally {
@@ -1189,6 +1411,12 @@
       else nextPotty = now + litter.gap(Math.random);
       pottyNow = false;
     }
+    // подарок на 100 дней: раз за жизнь, в спокойную минуту; из трея dev-сборки — как только свободна
+    if (!potty && !payback && !hunt && !game && pet && world && giftTime(now)) {
+      const started = gift.start(world, pet, now);
+      if (started) [giving, pet] = started;
+      giftNow = false;
+    }
     const was = pet && `${pet.move} ${pet.hunt?.mode}`;
     // мышь бегает и пока кошку несут: погоню это прерывает, но мышь удирает своим ходом
     let ruled = false;
@@ -1229,7 +1457,7 @@
     }
     // месть так же: взяли на руки, лазер, ушла, «не мешать» или созвон — бросает, кошкой правит приложение
     if (payback && pet && world) {
-      if (revenge.owns(payback) && (carried || dot !== null || away() || !unbothered())) payback = revenge.drop(payback);
+      if (revenge.owns(payback) && (carried || dot !== null || away() || !unbothered() || onTimer())) payback = revenge.drop(payback);
       const acting = revenge.owns(payback);
       let e: roam.RoamEvent | null;
       let p: roam.Pet;
@@ -1254,12 +1482,29 @@
       // закопала — в лотке ещё комочек
       if (phase === 'dig' && potty.phase === 'leave') {
         box = litter.used(box);
+        if (today) today = diary.potty(today);
         persist(now);
       }
       if (potty.phase === 'done') {
         potty = null;
         nextPotty = now + litter.gap(Math.random);
       }
+    }
+    // подарок так же: взяли на руки, лазер, кино, «не мешать», созвон — бросает. Уносила мышь — обиделась
+    // всё равно: спать уйдёт за край обычным путём
+    if (giving && pet && world) {
+      if (gift.owns(giving) && !canGift(now)) {
+        if (giving.phase === 'carry' || giving.phase === 'eat') nap = sleepy.bored(nap);
+        giving = gift.drop(giving);
+      }
+      const acting = gift.owns(giving);
+      let e: roam.RoamEvent | null;
+      let p: roam.Pet;
+      let cue: gift.Cue | null;
+      [giving, p, cue, e] = gift.tick(giving, world, pet, present.place, now, dt);
+      if (acting) [pet, event, ruled] = [p, e, true];
+      if (cue) presented(cue, now);
+      if (giving.phase === 'done') giving = null;
     }
     // лужа едет за своим окном и сохнет сама; «не мешать» или созвон — пропадает сразу
     if (puddle) {
@@ -1313,7 +1558,7 @@
       if (`${pet.move} ${pet.hunt?.mode}` !== was) render();
       else place();
     }
-    const perched = pet?.hwnd != null || bowlPlace?.hwnd != null || (bedOn && bedPlace?.hwnd != null) || (litterOn && litterPlace?.hwnd != null);
+    const perched = pet?.hwnd != null || bowlPlace?.hwnd != null || (bedOn && bedPlace?.hwnd != null) || (litterOn && litterPlace?.hwnd != null) || (gift.lying(present) && present.place?.hwnd != null);
     if (now - lastWorld >= (perched ? PERCH_WORLD_MS : WORLD_MS)) survey();
   }
 
@@ -1327,12 +1572,26 @@
     }
     // жирок по сегодняшней дате: если комп не выключали с октября, кошка всё равно потолстеет
     if (anim) {
-      const { frames } = ANIMS[fatOn(new Date())][anim];
+      // стадия роста: малыш, подросток или взрослая; в момент роста — мерцает между ними
+      const kit = growing.animsFor(stageNow(now), fatOn(new Date()));
+      const { frames } = kit[anim];
+      // в момент роста кадр не листается: перерисовка частая, а мигать должна только стадия
+      const still = growAt && anim === 'sit';
+      // на таймере — калачик рядом с песочными часами, хвост не качается (hourglass.ts)
+      const base =
+        pomodoro.focusing(focus) && (anim === 'sleep' || anim === 'bed')
+          ? focusFrame(kit.sleep.frames, tick, pomodoro.progress(focus, now), anim === 'bed')
+          : frames[still ? 0 : tick % frames.length];
       // наряд по календарю: шапка, тыква — на любую позу с головой анфас
-      const drawn = dress(frames[tick % frames.length], holidays.outfit(new Date()));
+      // мышь в зубах — до наряда: наряд перекрывает макушку, по которой её ищут.
+      // Наряд за достижение — в остальные дни: праздничный важнее.
+      let drawn = dress(gift.carrying(giving) ? withMouse(base) : base, holidays.outfit(new Date()) ?? awards.worn(prize));
+      if (still) drawn = growing.sparkle(drawn, now - growAt);
+      // окрас — на готовый кадр, но до зеркала: пятна трёхцветной поворачиваются вместе с ней
+      drawn = paint(drawn, breed);
       // все позы нарисованы мордой вправо; «з-з-з» — буквы, их не зеркалят
       frame = pet?.facing === -1 && anim !== 'zzz' ? flip(drawn) : drawn;
-      draw(canvas.getContext('2d')!, frame);
+      draw(canvas.getContext('2d')!, frame, coat);
     } else {
       frame = [];
       canvas.getContext('2d')!.clearRect(0, 0, SIZE, SIZE);
@@ -1349,6 +1608,7 @@
     tellBowl();
     tellBed();
     tellLitter();
+    tellGift();
     if (speakingUntil && !free() && !forced) hush();
   }
 
@@ -1356,8 +1616,54 @@
   function loop() {
     tick++;
     buzz(Date.now());
+    grows(Date.now());
     render();
-    timer = setTimeout(loop, anim ? ANIMS[0][anim].ms : AWAY_TICK_MS);
+    // у малыша и подростка темп тот же, что у взрослой (sprite-young.test.ts)
+    timer = setTimeout(loop, growAt ? GROW_TICK_MS : anim ? ANIMS[0][anim].ms : AWAY_TICK_MS);
+  }
+
+  /** Какая стадия на экране сейчас. */
+  function stageNow(now: number): growing.Stage {
+    return growAt ? growing.momentAt(growPath, now - growAt) : growing.shown(growth, stats.together, form);
+  }
+
+  /** Начать момент роста: сидит, мерцает между стадиями, звёздочки; облачко — когда «вытянулась». */
+  function startGrow(now: number, kind: growing.Moment, path: growing.Stage[]) {
+    growAt = now;
+    growKind = kind;
+    growPath = path;
+    growSaid = false;
+    clearTimeout(timer);
+    timer = setTimeout(loop, GROW_TICK_MS);
+  }
+
+  /**
+   * Момент роста идёт: доиграл — запомнить, что человек его видел. Взяли на руки, погладили,
+   * спрятали «боссом» — момент не засчитан, покажется в другой свободный раз.
+   */
+  function grows(now: number) {
+    if (!growAt) return;
+    const el = now - growAt;
+    if (bossed || !free() || now < pettedUntil) {
+      if (growSaid && speakingUntil) hush();
+      growAt = 0;
+      return;
+    }
+    if (!growSaid && el >= growing.momentMs(growPath)) {
+      growSaid = true;
+      speak(
+        growKind === 'power'
+          ? t('Смотри, что я теперь умею! Форму можно выбрать в настройках.', 'Look what I can do now! You can pick my form in the settings.')
+          : t('Смотри, я подросла!', "Look, I've grown!"),
+        now,
+      );
+    }
+    if (el < growing.totalMs(growPath)) return;
+    growAt = 0;
+    growth = growing.apply(growth, stats.together, growKind);
+    persist(now);
+    // открытое окно настроек меняет подпись «откроется через…» на ползунок
+    if (growth.power) emitTo('settings', 'growth', { growth: growing.save(growth), together: stats.together }).catch(console.error);
   }
 
   /**
@@ -1395,11 +1701,16 @@
       if (film.active && pet && world) filmScreen = movie.petScreen(world, pet);
       lastMove = now;
       persist(now);
+    } else if (focus && pomodoro.focusing(focus)) {
+      // спит на таймере: не просыпается и не мурчит — говорит, сколько осталось, тычком это не считается
+      forced = true;
+      talk = { ...talk, spoke: now };
+      speak(pomodoro.leftLine(focus, now), now);
     } else if (!disturb(now)) {
       pettedUntil = now + PETTED_MS;
       stats.petted++;
       // гладят без передышки — это уже тычки (revenge.PESTER_CLICKS)
-      grudge = revenge.poked(grudge, now, Math.random, mode);
+      grudge = revenge.poked(grudge, now, Math.random, mode, trait().touchy);
       talk = chatter.liked(talk, now);
     }
     render();
@@ -1440,17 +1751,30 @@
     if (s.name !== petName) invoke('name_pet', { name: s.name }).catch(console.error);
     petName = s.name;
     reviewsOn = s.reviews;
+    form = s.form;
     tellUpdates(s.updates);
     // ленты новых тем качаются сразу, а не когда кошка соберётся рассказать
     invoke('news_topics', { topics: [...topics] }).catch(console.error);
-    if (s.chatter !== chatterLevel) {
+    // игры и серии: Rust сам решает, что качать; выключили — отложенное про запас не скажем
+    const releases = releasesSetup(s);
+    releasesOn = releases.steam || releases.anime !== '';
+    if (held?.link && !(held.topic === 'игры' ? releases.steam : releases.anime)) held = null;
+    invoke('releases_setup', releases).catch(console.error);
+    if (s.chatter !== chatterLevel || s.breed !== breed) {
       chatterLevel = s.chatter;
-      talk = chatter.retime(talk, chatterLevel, Date.now(), Math.random);
+      setBreed(s.breed);
+      talk = chatter.retime(talk, chatterLevel, Date.now(), Math.random, trait().talky);
     }
     invoke('set_capture_hidden', { hidden: s.hideFromCapture }).catch(console.error);
     tellBowl();
     tellBed();
     tellLitter();
+  }
+
+  /** Сменили окрас: палитра считается один раз здесь, а не на каждом кадре. */
+  function setBreed(b: Breed) {
+    breed = b;
+    coat = palette(b);
   }
 
   /** Галочка «проверять обновления» — в update.rs; в ответ уже найденная версия, если есть. */
@@ -1507,6 +1831,8 @@
         text: t('Расскажи новость', 'Tell me the news'),
         hint: topics.length ? t('по выбранным темам', 'on your topics') : t('сначала выбери темы', 'pick topics first'),
       },
+      // «Фокус 25 минут», а пока идёт — «Отменить фокус» с остатком минут
+      pomodoro.menuEntry(focus, Date.now()),
       { separator: true },
       {
         id: 'feeder',
@@ -1539,6 +1865,53 @@
     else if (id === 'news' && topics.length) newsNow();
     else if (id === 'news') invoke('open_settings').catch(console.error);
     else if (id === 'about') invoke(petName ? 'open_stats' : 'open_settings').catch(console.error);
+    else if (id === 'focus') startFocus();
+    else if (id === 'focus-cancel') cancelFocus();
+  }
+
+  /**
+   * «Фокус 25 минут» из меню кошки или трея: всё бросает и засыпает на таймере (live), облачко
+   * убирает сразу. Трею — срок, чтобы пункт стал «Отменить фокус» с остатком минут.
+   */
+  function startFocus() {
+    if (frozen) return;
+    focus = pomodoro.start(Date.now());
+    pettedUntil = 0;
+    if (speakingUntil) hush();
+    invoke('set_focus', { until: focus.until }).catch(console.error);
+    render();
+  }
+
+  /** «Отменить фокус»: просыпается без обид, как после разблокировки экрана; фокус не засчитан. */
+  function cancelFocus() {
+    if (!pomodoro.focusing(focus)) return;
+    focus = null;
+    invoke('set_focus', { until: 0 }).catch(console.error);
+    if (sleepy.mood(nap) === 'asleep' && !carried) {
+      nap = sleepy.stir(nap);
+      sleepPose = null;
+    }
+    if (speakingUntil) hush();
+    persist(Date.now());
+    render();
+  }
+
+  /** Облачко «Перерыв!» висит минуту: кнопку надо успеть заметить, а ныть весь перерыв незачем. */
+  const OFFER_MS = 60_000;
+
+  /**
+   * Облачко «Перерыв! Поиграем?» с кнопкой «Лазер». Ждёт, пока человеку можно мешать: созвон, игра
+   * на весь экран, «не мешать», экран заблокирован — не сейчас; не дождалось за OFFER_WAIT_MS —
+   * перерыв кончается молча (pomodoro.step). Голодная сначала просит покормить.
+   */
+  function breakTime(now: number) {
+    if (!focus || !pomodoro.offerDue(focus) || frozen || bossed || carried || !head || away() || onCall()) return;
+    if ((senses?.quiet ?? 'no') !== 'no' || sleepy.mood(nap) !== 'awake') return;
+    forced = true;
+    // после облачка — обычная тишина, чтобы следом не заговорила сама
+    talk = { ...talk, spoke: now };
+    speak(pomodoro.offerLine(isHungry(belly) || mealPending), now, null, OFFER_MS, pomodoro.offerAct());
+    focus = pomodoro.offered(focus, now);
   }
 
   /** Разблокировали экран: спала, пока человека не было, — просыпается без обид и радуется. */
@@ -1546,7 +1919,7 @@
     const long = now - lockedAt >= LOCK_JOY_MS;
     lockedAt = 0;
     graceUntil = now + UNLOCK_GRACE_MS;
-    if (carried || sleepy.mood(nap) !== 'asleep') return;
+    if (carried || sleepy.mood(nap) !== 'asleep' || pomodoro.focusing(focus)) return;
     nap = sleepy.stir(nap);
     sleepPose = null;
     if (long) pettedUntil = now + JOY_MS;
@@ -1559,6 +1932,10 @@
       // кошка засыпала бы на NAP_MS прямо на старте. Скучать начинает, только увидев человека.
       senses = await invoke<Senses>('senses');
       seenHuman ||= !senses.idle;
+      if (loaded && senses.input) {
+        stats = tally.absorb(stats, lastInput, senses.input);
+        lastInput = senses.input;
+      }
       watch(Date.now(), senses);
       const locked = senses.quiet === 'away';
       if (locked && !lockedAt) lockedAt = Date.now();
@@ -1575,20 +1952,55 @@
     } catch (e) {
       console.error(e);
     }
+    breakTime(Date.now());
     party(Date.now());
+    boast(Date.now());
     flyBy(Date.now());
     chat(Date.now());
   }
 
+  /** Окну статистики — достижения: полученные, ближайшие и наряд. Окно закрыто — событие никуда не уйдёт. */
+  function sendAwards() {
+    emitTo('stats', 'awards', prize).catch(console.error);
+  }
+
+  /**
+   * Новое достижение: сверить со статистикой и сказать одним облачком — в общем лимите, как
+   * обычные реплики: пауза в работе, кошка свободна, после прошлого облачка прошло GAP_MS.
+   * Не вышло — достижение ждёт в prize.unsaid, а не теряется.
+   */
+  function boast(now: number) {
+    if (!loaded) return;
+    const was = prize;
+    prize = awards.check(prize, stats, now);
+    if (prize !== was) {
+      sendAwards();
+      persist(now);
+    }
+    if (!prize.unsaid.length || frozen || bossed || speakingUntil || flyAt || film.active || !senses || !head) return;
+    const pause = !senses.idle && !senses.typing && (senses.quiet ?? 'no') === 'no';
+    if (!pause || now - talk.spoke < chatter.GAP_MS || !free() || !unbothered()) return;
+    const due = awards.herald(prize);
+    if (!due) return;
+    prize = due[0];
+    talk = { ...talk, spoke: now };
+    speak(due[1], now);
+  }
+
   /** Тортик или годовщина: ждёт, пока кошка свободна, облачко пусто и человеку можно мешать. */
   function party(now: number) {
-    if (bossed || speakingUntil || flyAt || !free() || !unbothered()) return;
+    if (bossed || speakingUntil || flyAt || growAt || now < cakeUntil || onTimer() || !free() || !unbothered()) return;
     const due = holidays.celebrate(stats, now);
-    if (!due) return;
-    [stats] = due;
-    cakeUntil = now + CAKE_MS;
-    speak(due[1], now);
-    persist(now);
+    if (due) {
+      [stats] = due;
+      cakeUntil = now + CAKE_MS;
+      speak(due[1], now);
+      persist(now);
+      return;
+    }
+    // подросла — показывает в следующий свободный раз, после тортика за те же часы
+    const m = growing.due(growth, stats.together);
+    if (m) startGrow(now, m, growing.steps(growth, stats.together, m));
   }
 
   onMount(() => {
@@ -1606,6 +2018,7 @@
       litterOn = settings.litter;
       nextPotty = Date.now() + litter.gap(Math.random);
       chatterLevel = settings.chatter;
+      setBreed(settings.breed);
       topics = settings.topics;
       reviewsOn = settings.reviews;
       tellUpdates(settings.updates);
@@ -1618,18 +2031,28 @@
       // имя — репликам и трею; иначе после перезапуска кошка безымянная, пока не тронешь настройки
       petName = settings.name;
       if (petName) invoke('name_pet', { name: petName }).catch(console.error);
-      talk = chatter.load(store.get('talk'), Date.now(), chatterLevel, Math.random);
+      talk = chatter.load(store.get('talk'), Date.now(), chatterLevel, Math.random, trait().talky);
       bowlPlace = loadPlace('bowl');
       bedPlace = loadPlace('bed');
       litterPlace = loadPlace('litter');
       box = litter.loadBox(store.get('litter'));
+      present = gift.load(store.get('gift'));
       // Rust создаёт окна спрятанными от записи экрана; выключил человек галочку — показываемся
       invoke('set_capture_hidden', { hidden: settings.hideFromCapture }).catch(console.error);
       belly = load(store.get('belly'));
       nap = sleepy.load(store.get('sleep'));
       stats = tally.load(store.get('stats'), Date.now());
+      prize = awards.load(store.get('awards'));
+      loaded = true;
+      // записи о росте нет, а статистика или сытость есть — обновились со старой версии: кошка взрослая
+      growth = growing.load(store.get('growth'), store.get('stats') !== null || store.get('belly') !== null);
+      form = settings.form;
       grudge = revenge.load(store.get('revenge'), Date.now());
       if (world) pet = roam.restore(world, loadSpot(), away());
+      // дневник: вчерашний день, если программу закрыли до полуночи, запишется прямо сейчас
+      today = diary.load(store.get('day'), chatter.dayKey(new Date()), stats);
+      pages = diary.loadList(store.get('diary'));
+      turnPage(Date.now());
       lastMove = Date.now();
       render();
       timer = setTimeout(loop, anim ? ANIMS[0][anim].ms : AWAY_TICK_MS);
@@ -1642,6 +2065,16 @@
       if (!belly.gone) return;
       belly = fresh();
       nap = sleepy.fresh();
+      // новый котик — снова малыш, счёт с нынешнего общего времени; форма — снова своя
+      growth = growing.fresh(stats.together);
+      growAt = 0;
+      const s = parse(store.get('settings'));
+      if (s.form !== 'adult') {
+        s.form = 'adult';
+        store.set('settings', serialize(s));
+        applySettings(s);
+        emitTo('settings', 'settings', s).catch(console.error);
+      }
       comeBack(Date.now());
       persist(Date.now());
       render();
@@ -1689,6 +2122,40 @@
       persist(Date.now());
       tellLitter();
     });
+    // окно подарка — так же, как лотка
+    const ungiftHello = listen('gift-hello', () => {
+      lastGift = '';
+      tellGift();
+    });
+    const ungiftDrop = listen<{ x: number; bottom: number }>('gift-drop', (e) => putDown('gift', e.payload.x, e.payload.bottom));
+    // ПКМ по подарку (Thing.svelte): «Принять» — мурлычет, мышка остаётся трофеем. Занята или спит —
+    // просто трофей, без мурлыканья
+    const unaccept = listen('gift-accept', () => {
+      const now = Date.now();
+      if (present.state !== 'given' || taking()) return;
+      present = gift.accept(present);
+      if (giving?.phase === 'wait') giving = null;
+      if (!giving && pet && (pet.move === 'still' || pet.move === 'walk') && canGift(now)) {
+        [giving, pet] = gift.thank(pet, now);
+        giftSay(gift.purrLine(), now);
+      }
+      persist(now);
+      render();
+    });
+    // «Убрать»: ждущий подарок — обижается, уносит мышь за край, ест там и спит; трофей убирают молча.
+    // Не может пойти (спит, за краем, занята) — подарок просто пропадает
+    const unremove = listen('gift-remove', () => {
+      const now = Date.now();
+      if (!gift.lying(present) || taking()) return;
+      if (giving?.phase === 'wait') giving = null;
+      const back = present.state === 'given' && !giving && pet && world && canGift(now) ? gift.takeBack(world, pet, present.place, now) : null;
+      if (back) {
+        [giving, pet] = back;
+        giftSay(gift.hurtLine(), now);
+      } else present = gift.remove();
+      persist(now);
+      render();
+    });
     // «Позвать питомца» в трее. Досыпает за краем в обиде — прощает и приходит оттуда же
     // (вход сделает live()); ушедшую за едой и пропавшую зов не вернёт. Дома зов ничего не
     // делает: позвали дважды — не телепортируется; с отключённого монитора и так снимет roam.
@@ -1725,6 +2192,18 @@
     const unfly = listen('dev-fly', () => {
       if (!bossed && !flyAt && free()) startFly(Date.now());
     });
+    // «Подарок» оттуда же: заново, мимо 2400 часов и «раз за жизнь»; пока мышка лежит — не дарит
+    const ungift = listen('dev-gift', () => {
+      if (gift.lying(present) || giving) return;
+      present = gift.fresh();
+      giftNow = true;
+    });
+    // «Рост» оттуда же: момент, который пора показать; не пора — просто показать малыша, подростка и взрослую
+    const ungrow = listen('dev-grow', () => {
+      if (bossed || growAt || !free()) return;
+      const m = growing.due(growth, stats.together);
+      startGrow(Date.now(), m ?? 'grow', m ? growing.steps(growth, stats.together, m) : [0, 1, 2]);
+    });
     const unlitter = listen('dev-litter', () => {
       if (!litterOn) toggle('litter');
       nextPotty = 0;
@@ -1736,6 +2215,9 @@
       revengeNow = true;
     });
     // нашлась версия новее (update.rs): пункт в меню; ставить зовут и из трея
+    // «Фокус 25 минут» и «Отменить фокус» из трея (lib.rs) — то же, что в меню кошки
+    const unfocus = listen('focus', startFocus);
+    const unfocusCancel = listen('focus-cancel', cancelFocus);
     const unupdate = listen<string>('update', (e) => {
       updateTo = e.payload;
     });
@@ -1762,7 +2244,18 @@
     });
     const unpick = win.listen<{ id: string }>('menu-pick', (e) => menuPick(e.payload.id));
     // окно «Статистика» спрашивает свежие цифры: в файле они догоняют только при сохранении
-    const unstats = win.listen('stats-ask', () => emitTo('stats', 'stats', stats).catch(console.error));
+    const unstats = win.listen('stats-ask', () => {
+      emitTo('stats', 'stats', stats).catch(console.error);
+      emitTo('stats', 'diary', { today: today && diary.facts(today, stats), pages }).catch(console.error);
+      sendAwards();
+    });
+    // наряд выбрали в окне статистики: наряд, «без наряда» или «сама»
+    const unwear = win.listen<unknown>('wear', (e) => {
+      prize = awards.choose(prize, e.payload);
+      persist(Date.now());
+      sendAwards();
+      render();
+    });
     // своим окном: такое же событие Rust шлёт и окнам миски и лежака
     const undrag = win.listen('drag-start', pickUp);
     // лазер: Rust шлёт курсор, пока указка включена, — охоту ведёт move()
@@ -1794,19 +2287,31 @@
         forced = false;
         return;
       }
-      talk = chatter.shoo(talk, chatterLevel, Math.random);
+      talk = chatter.shoo(talk, chatterLevel, Math.random, trait().talky);
       persist(Date.now());
     });
-    // лайк/диз под новостью: окно уже спряталось; тема и источник — чаще или реже, болтать реже не станет
-    const unvote = win.listen<{ up: boolean }>('bubble-vote', (e) => {
+    // лайк/диз под новостью: окно уже спряталось; тема и источник — чаще или реже, болтать реже не станет.
+    // Под патчем или серией — «Глянем» (open) открывает ссылку, «Мимо» просто убирает; вкусов не трогаем
+    const unvote = win.listen<{ up: boolean; open?: boolean }>('bubble-vote', (e) => {
       const about = voteFor;
       speakingUntil = 0;
       forced = false;
       voteFor = null;
       if (!about) return;
+      if (about.link) {
+        if (e.payload.open) invoke('open_link', { url: about.link }).catch(console.error);
+        return;
+      }
       talk = chatter.vote(talk, about.topic, e.payload.up);
       invoke('news_vote', { source: about.source, up: e.payload.up }).catch(console.error);
       persist(Date.now());
+    });
+    // кнопка «Лазер» в облачке «Перерыв!»: облачко уже спряталось само, указку включает Rust
+    const unact = win.listen('bubble-act', () => {
+      speakingUntil = 0;
+      forced = false;
+      voteFor = null;
+      invoke('set_laser', { on: true }).catch(console.error);
     });
     return () => {
       alive = false;
@@ -1815,8 +2320,9 @@
       clearInterval(moving);
       clearInterval(id);
       const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn, unnews, unrevenge, unupdate, uninstall];
-      offs.push(unlitterHello, unlitterDrop, unlitterGrab, unscoop, unchange, unlitter, unfly);
-      for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, unstats, undrag, unlaser, unlaserOff, unshoo, unvote, unboss, unshot, uncrunch]) off.then((f) => f());
+      offs.push(unlitterHello, unlitterDrop, unlitterGrab, unscoop, unchange, unlitter, unfly, unfocus, unfocusCancel, ungrow);
+      offs.push(ungiftHello, ungiftDrop, unaccept, unremove, ungift);
+      for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, unstats, unwear, undrag, unlaser, unlaserOff, unshoo, unvote, unact, unboss, unshot, uncrunch]) off.then((f) => f());
     };
   });
 </script>

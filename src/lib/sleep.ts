@@ -4,6 +4,7 @@
 // Будить не доспавшую можно, но она это запоминает: вялая → злая → обиделась и ушла за край экрана.
 // Приложение зовёт `step` на каждом кадре с разницей Date.now(); разница обрезается до [0, MAX_STEP_MS].
 
+import { soft } from './breed';
 import { MAX_STEP_MS } from './hunger';
 
 const MIN = 60_000;
@@ -56,10 +57,12 @@ const rested = (s: Sleep): Sleep => ({ ...s, asleep: false, slept: 0, awake: 0, 
 /**
  * Один кадр жизни. Чистая функция: возвращает новый объект и событие, вход не трогает.
  * `tired` — во сколько раз быстрее копится усталость: от батареи, в «не свои» часы.
+ * `sleepy` — сонливость окраса (breed.ts): соня и устаёт быстрее, и спит дольше NAP_MS.
  */
-export function step(s: Sleep, ms: number, humanIdle: boolean, tired = 1): [Sleep, SleepEvent | null] {
+export function step(s: Sleep, ms: number, humanIdle: boolean, tired = 1, sleepy = 1): [Sleep, SleepEvent | null] {
   const dt = Math.min(Math.max(ms, 0), MAX_STEP_MS) || 0;
-  const wear = dt * (Number.isFinite(tired) && tired > 0 ? tired : 1);
+  const k = soft(sleepy);
+  const wear = dt * (Number.isFinite(tired) && tired > 0 ? tired : 1) * k;
 
   // Спит за краем: вытащить нельзя, возвращается сама выспавшейся.
   if (s.away > 0) {
@@ -79,7 +82,7 @@ export function step(s: Sleep, ms: number, humanIdle: boolean, tired = 1): [Slee
   // Спит дома: выспалась — просыпается, но пока человек отошёл, спит дальше.
   if (s.asleep) {
     const n: Sleep = { ...s, slept: s.slept + dt };
-    if (n.slept >= NAP_MS && !humanIdle) return [rested(n), 'wake'];
+    if (n.slept >= NAP_MS * k && !humanIdle) return [rested(n), 'wake'];
     return [n, null];
   }
 

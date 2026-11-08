@@ -235,15 +235,23 @@ unsafe fn handle_input(h: HRAWINPUT) {
 /// а если его нет — имя exe без расширения.
 pub struct Foreground {
     cache: HashMap<String, String>,
+    /// Путь exe с последнего [`Foreground::current`]: по нему узнаём игру.
+    path: Option<String>,
 }
 
 impl Foreground {
     pub fn new() -> Self {
-        Foreground { cache: HashMap::new() }
+        Foreground { cache: HashMap::new(), path: None }
+    }
+
+    /// Путь exe активного окна на момент последнего [`Foreground::current`].
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
     }
 
     pub fn current(&mut self) -> Option<String> {
-        let path = unsafe { foreground_exe()? };
+        self.path = unsafe { foreground_exe() };
+        let path = self.path.clone()?;
         if let Some(n) = self.cache.get(&path) {
             return Some(n.clone());
         }
@@ -407,6 +415,17 @@ pub fn bin_items() -> Option<i64> {
     // SAFETY: пустой путь — все диски; функция только пишет в переданную структуру.
     let hr = unsafe { SHQueryRecycleBinW(std::ptr::null(), &mut info) };
     (hr >= 0).then_some(info.i64NumItems)
+}
+
+/// Открыть https-ссылку в браузере по умолчанию. Адрес проверяет вызывающий.
+pub fn open_url(url: &str) -> bool {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let (verb, file) = (wide("open"), wide(url));
+    // SAFETY: строки с нулём на конце живут до возврата; окно-владелец не нужно.
+    let r = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+    // больше 32 — успех (так у ShellExecute заведено)
+    r as isize > 32
 }
 
 /// Корзину очистили: было что-то, стало пусто. Неизвестное состояние ни с чем не сравниваем.

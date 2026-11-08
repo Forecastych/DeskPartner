@@ -12,10 +12,16 @@
 //!
 //! Язык: качаются только ленты на языке интерфейса; записи на другом (после смены языка)
 //! из кэша выкидываются.
+//!
+//! Рядом — «вышло» (releases.rs): патчи игр из Steam и серии из AniList, каждое — своей
+//! галочкой в настройках; поток и статус у них общие с лентами.
 
+mod anilist;
 mod feeds;
 mod filter;
 mod parse;
+pub mod releases;
+mod steam;
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
@@ -116,6 +122,9 @@ pub struct FeedStatus {
     items: usize,
     /// Вес источника по голосам: больше 1 — чаще, меньше — реже.
     weight: f64,
+    /// Что источник не нашёл (тайтлы AniList), для подсказки в настройках.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    missing: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -284,6 +293,7 @@ fn status(cache: &Cache) -> Vec<FeedStatus> {
             ok: last.map(|l| l.ok),
             next: cache.next.get(f.url).copied(),
             weight: weight(&cache.sources, f.source),
+            missing: Vec::new(),
         });
     }
     out
@@ -359,20 +369,20 @@ fn fetch(agent: &ureq::Agent, url: &str) -> Option<Vec<Entry>> {
     Some(parse::parse(xml.trim_start_matches('\u{feff}')))
 }
 
-/// Скачать ленты, у которых подошёл срок. Пока качаем, кэш не заперт.
+/// Скачать ленты, у которых подошёл срок, потом — «вышло». Пока качаем, кэш не заперт.
 fn refresh() {
     let urls = with_cache(|c| due(c, now()));
-    if urls.is_empty() {
-        return;
+    if !urls.is_empty() {
+        BUSY.store(true, Ordering::Relaxed);
+        let agent = agent();
+        for url in urls {
+            let entries = fetch(&agent, url);
+            with_cache(|c| merge(c, url, entries.as_deref(), now()));
+        }
+        with_cache(|c| save(c));
+        BUSY.store(false, Ordering::Relaxed);
     }
-    BUSY.store(true, Ordering::Relaxed);
-    let agent = agent();
-    for url in urls {
-        let entries = fetch(&agent, url);
-        with_cache(|c| merge(c, url, entries.as_deref(), now()));
-    }
-    with_cache(|c| save(c));
-    BUSY.store(false, Ordering::Relaxed);
+    releases::refresh();
 }
 
 fn wake() {
@@ -443,7 +453,8 @@ pub fn news_vote(source: String, up: bool) {
 /// Статус лент для настроек.
 #[tauri::command]
 pub fn news_status() -> NewsStatus {
-    let feeds = with_cache(|c| status(c));
+    let mut feeds = with_cache(|c| status(c));
+    feeds.extend(releases::status_rows());
     NewsStatus { busy: BUSY.load(Ordering::Relaxed), now: now(), feeds }
 }
 
@@ -451,6 +462,7 @@ pub fn news_status() -> NewsStatus {
 #[tauri::command]
 pub fn news_refresh() {
     with_cache(|c| force(c, now()));
+    releases::force();
     wake();
 }
 

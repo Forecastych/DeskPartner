@@ -59,6 +59,9 @@
           <span class="name">{f.source}</span>
           <span class="topics">· {f.topics.map((x) => topicName(x as Topic)).join(', ')}</span>
           <span class="state" class:bad={f.ok === false}>{feedState(f, status.now, status.busy)}</span>
+          {#if f.missing?.length}
+            <span class="state bad">{t('Не нашли:', 'Not found:')} {f.missing.join(', ')}</span>
+          {/if}
         </li>
       {/each}
     </ul>

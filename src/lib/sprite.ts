@@ -2,13 +2,15 @@
 // поэтому одна и та же голова не перерисовывается в каждой позе, а шаги отличаются только лапами.
 // Все позы смотрят вправо; влево — `flip`.
 
+import { WEAR_ART, WEAR_PALETTE, type Piece, type Wear } from './wardrobe';
+
 export const SIZE = 32;
 
 /** Кадр: SIZE строк по SIZE символов, символ — ключ палитры, '.' — пусто. */
 export type Frame = string[];
 
 /** Деталь: строки любой длины, '.' не закрашивает то, что под ней. */
-type Part = string[];
+export type Part = string[];
 
 export const PALETTE: Record<string, string> = {
   k: '#2b2b33', // контур
@@ -17,6 +19,12 @@ export const PALETTE: Record<string, string> = {
   l: '#e4e6ec', // грудка, щёки, живот
   p: '#e98aa0', // уши изнутри, нос
   w: '#ffffff', // блик в глазу
+  // Зрачки открытых глаз — отдельным ключом, хоть и цвета контура: у чёрной кошки контур сливается
+  // с шерстью, и глаза ей перекрашивают в жёлтые (coat.ts). Закрытые глаза и «^ ^» — контуром.
+  E: '#2b2b33',
+  // Пятна трёхцветной (coat.ts ставит их поверх шерсти); в кадрах sprite.ts их нет.
+  x: '#e08a3c',
+  X: '#3b3540',
   h: '#e2556b', // сердечко
   z: '#bcd4ff', // «з-з-з» во сне
   s: '#ffd34d', // звёздочки, когда врезалась
@@ -48,6 +56,11 @@ export const PALETTE: Record<string, string> = {
   v: '#e6d3a3', // наполнитель
   V: '#b9a172', // наполнитель потемнее, старый
   j: '#8c7448', // комочки в наполнителе
+  // Песочные часы помодоро: стекло полупрозрачное, как лужа, — сквозь него видно окно.
+  G: '#7a4f2c', // часы: деревянные донца
+  Q: 'rgba(200, 228, 255, 0.5)', // часы: пустое стекло
+  S: '#e8b64a', // часы: песок
+  ...WEAR_PALETTE, // наряды за достижения — цифры
 };
 
 /** Миска и корм в ней: клик сюда кормит, а не гладит. */
@@ -75,13 +88,13 @@ const HEAD_BOTTOM: Part = [
   '.kllllllllk.',
   '..kkkkkkkk..',
 ];
-const EYES_OPEN: Part = ['kfwkffffwkfk', 'kfkkffffkkfk'];
+const EYES_OPEN: Part = ['kfwEffffwEfk', 'kfEEffffEEfk'];
 const EYES_SHUT: Part = ['kffffffffffk', 'kfkkffffkkfk'];
 const EYES_HAPPY: Part = ['kffkffffkffk', 'kfkfkffkfkfk'];
 // Не доспала: веки тяжёлые, глаза полуприкрыты.
-const EYES_SLEEPY: Part = ['kfddffffddfk', 'kfkkffffkkfk'];
+const EYES_SLEEPY: Part = ['kfddffffddfk', 'kfEEffffEEfk'];
 // Злая: косые щёлки, внутренние концы ниже — «\ /».
-const EYES_ANGRY: Part = ['kfkffffffkfk', 'kffkkffkkffk'];
+const EYES_ANGRY: Part = ['kfEffffffEfk', 'kffEEffEEffk'];
 
 // Мяу: рот открыт, видно язык.
 const HEAD_MEOW: Part = ['klfffppffflk', '.kllkppkllk.', '..kkkkkkkk..'];
@@ -258,14 +271,15 @@ const SPRAY_B: Part = ['.V.', 'v.v'];
 const HEART: Part = ['.hh.hh.', 'hhhhhhh', 'hhhhhhh', '.hhhhh.', '..hhh..', '...h...'];
 const Z_SMALL: Part = ['zzzz', '..z.', '.z..', 'zzzz'];
 
-// Тортик на тарелке, 7×8: свечка, вишенка, крем, корж.
-const CAKE: Part = ['...s...', '...k...', '.kkkkk.', '.klhlk.', '.kcccck', '.kcCck.', 'kwwwwwk', '.kkkkk.'];
+// Тортик на тарелке, 7×8: свечка, вишенка, крем, корж. Крем — цветом меха шапки, а не грудки:
+// перекраска кошки (coat.ts) торт не трогает.
+const CAKE: Part = ['...s...', '...k...', '.kkkkk.', '.kIhIk.', '.kcccck', '.kcCck.', 'kwwwwwk', '.kkkkk.'];
 // Лапа, вытянутая вбок к тарелке.
 const PAW_SIDE: Part = ['.kkk', 'klfk', '.kkk'];
 const Z_BIG: Part = ['zzzzz', '...z.', '..z..', '.z...', 'zzzzz'];
 
 /** Штампует детали по порядку: следующая рисуется поверх предыдущей. */
-function compose(...parts: [Part, number, number][]): Frame {
+export function compose(...parts: [Part, number, number][]): Frame {
   const g = Array.from({ length: SIZE }, () => Array<string>(SIZE).fill('.'));
   for (const [part, x0, y0] of parts)
     part.forEach((row, dy) => {
@@ -626,8 +640,43 @@ function carried(fat: Fat, eyes: Part, sway: boolean): Frame {
   );
 }
 
+/** Верх спины в потягушках по столбцам: круп задран, к груди спина скатывается. */
+const BOW_TOP = [3, 2, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 8, 9];
+
+/** Туловище в потягушках: контур — всё, что граничит с пустотой, живот светлый к груди. */
+function bowBody(fat: Fat): Part {
+  const h = 8 + fat;
+  const inside = (x: number, y: number) =>
+    x >= 0 && x < BOW_TOP.length && y >= BOW_TOP[x] && y < BOW_TOP[x] + h - (x === 0 || x === BOW_TOP.length - 1 ? 1 : 0);
+  return Array.from({ length: Math.max(...BOW_TOP) + h }, (_, y) =>
+    BOW_TOP.map((t, x) => {
+      if (!inside(x, y)) return '.';
+      if (!inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1)) return 'k';
+      if (y >= t + h - 3 && x >= 9) return 'l';
+      return (x === 4 || x === 7 || x === 10) && y <= t + 2 ? 'd' : 'f';
+    }).join(''),
+  );
+}
+
+/** Передняя лапа, вытянутая вперёд по полу; носочек светлый. */
+const ARM: Part = ['kkkkkkkkkk.', 'kffffffflk', 'kkkkkkkkkkk'];
+
+/** Потягивается после сна: круп и хвост вверх, передние лапы вперёд по полу, глаза зажмурены. */
+function stretching(fat: Fat, mouth: Part): Frame {
+  const y = 12 - fat;
+  return compose(
+    [TAIL_UP, 0, y - 7],
+    [leg(SIZE - y - 8), 3, y + 8],
+    [leg(SIZE - y - 7), 6, y + 7],
+    [bowBody(fat), 2, y],
+    [ARM, 19, 27],
+    [ARM, 21, 29],
+    [head(EYES_SHUT, mouth), 19, 17],
+  );
+}
+
 /** Спит в лежаке: калачик на пиксель ниже — в подушке, — снизу закрыт передним бортиком. */
-const inBed = (f: Frame): Frame => compose([['.'.repeat(SIZE), ...f.slice(0, SIZE - 1)], 0, 0], [BED_FRONT, 1, SIZE - BED_FRONT.length]);
+export const inBed = (f: Frame): Frame => compose([['.'.repeat(SIZE), ...f.slice(0, SIZE - 1)], 0, 0], [BED_FRONT, 1, SIZE - BED_FRONT.length]);
 
 /** Кошка в лотке стоит на наполнителе — выше пола на столько рядов. */
 const LITTER_LIFT = 2;
@@ -733,6 +782,11 @@ function build(fat: Fat) {
     },
     sleep,
     bed: { ms: sleep.ms, frames: sleep.frames.map(inBed) },
+    // потягушки после помодоро: зевнула — закрыла рот; хвост трубой не шевелится
+    stretch: {
+      ms: 900,
+      frames: [stretching(fat, HEAD_MEOW), stretching(fat, HEAD_MEOW), stretching(fat, HEAD_BOTTOM)],
+    },
     carried: {
       ms: 450,
       frames: [
@@ -948,14 +1002,27 @@ export function ground(anim: AnimName): number {
   return anim === 'sleep' ? 27 : SIZE - 1;
 }
 
-/** Наряд по случаю: шапка на Новый год, тыква на Хэллоуин. */
-export type Outfit = 'hat' | 'pumpkin';
+/** Наряд: по случаю (шапка на Новый год, тыква на Хэллоуин) или за достижение (wardrobe.ts). */
+export type Outfit = 'hat' | 'pumpkin' | Wear;
 
-// Наряды ставятся над рядом макушки (уши + темя) головы анфас, по её левому краю; 12 в ширину.
+// Наряды ставятся от ряда макушки (уши + темя) головы анфас, по её левому краю; 12 в ширину.
 const CROWN_ROW = 'kppkkkkkkppk';
-const OUTFITS: Record<Outfit, Part> = {
-  hat: ['........kk..', '.......kIIk.', '......kHkk..', '.....kHHk...', '....kHHHHk..', '..kIIIIIIk..'],
-  pumpkin: ['.....gk.....', '...kkgkkk...', '..koOoOook..', '..kOoOoOok..', '..kkkkkkkk..'],
+// Макушка малыша (sprite-young.ts) на два пикселя уже: наряд сдвигается на пиксель влево, по центру головы.
+const KIT_CROWN_ROW = 'kppkkkkppk';
+const hat: Part = ['........kk..', '.......kIIk.', '......kHkk..', '.....kHHk...', '....kHHHHk..', '..kIIIIIIk..'];
+const pumpkin: Part = ['.....gk.....', '...kkgkkk...', '..koOoOook..', '..kOoOoOok..', '..kkkkkkkk..'];
+/** Левый край и ряд макушки головы анфас, как у взрослой; головы анфас нет — null. Наряды и мышь в зубах ставятся от неё. */
+export function crownAt(frame: Frame): [number, number] | null {
+  const y = frame.findIndex((row) => row.includes(CROWN_ROW));
+  if (y >= 0) return [frame[y].indexOf(CROWN_ROW), y];
+  const k = frame.findIndex((row) => row.includes(KIT_CROWN_ROW));
+  return k >= 0 ? [frame[k].indexOf(KIT_CROWN_ROW) - 1, k] : null;
+}
+
+const OUTFITS: Record<Outfit, Piece> = {
+  hat: { rows: hat, dy: -hat.length },
+  pumpkin: { rows: pumpkin, dy: -pumpkin.length },
+  ...WEAR_ART,
 };
 
 /**
@@ -964,15 +1031,24 @@ const OUTFITS: Record<Outfit, Part> = {
  */
 export function dress(frame: Frame, outfit: Outfit | null): Frame {
   if (!outfit) return frame;
-  const y = frame.findIndex((row) => row.includes(CROWN_ROW));
-  if (y < 0) return frame;
-  const x = frame[y].indexOf(CROWN_ROW);
-  const part = OUTFITS[outfit];
+  const at = crownAt(frame);
+  if (!at) return frame;
+  const [x, y] = at;
+  const { rows, dy, under } = OUTFITS[outfit];
   const g = frame.map((r) => [...r]);
-  part.forEach((row, dy) => {
-    const ty = y - part.length + dy;
-    for (let dx = 0; dx < row.length; dx++)
-      if (row[dx] !== '.' && ty >= 0 && ty < SIZE && x + dx < SIZE) g[ty][x + dx] = row[dx];
+  rows.forEach((row, i) => {
+    const ty = y + dy + i;
+    if (ty < 0 || ty >= SIZE) return;
+    for (let dx = 0; dx < row.length && x + dx < SIZE; dx++) {
+      if (x + dx < 0) continue;
+      if (row[dx] === '.') continue;
+      // сердечко и «з-з-з» остаются поверх наряда; деталь под мордой — только поверх самой
+      // кошки: миска и бортики её закрывают
+      const was = g[ty][x + dx];
+      if (DECOR.has(was)) continue;
+      if (under && (was === '.' || THROUGH.has(was) || BOWL_KEYS.has(was))) continue;
+      g[ty][x + dx] = row[dx];
+    }
   });
   return g.map((r) => r.join(''));
 }
@@ -981,11 +1057,12 @@ export function flip(frame: Frame): Frame {
   return frame.map((r) => [...r].reverse().join(''));
 }
 
-export function draw(ctx: CanvasRenderingContext2D, frame: Frame): void {
+/** Нарисовать кадр; `palette` — окрас кошки (coat.ts), вещи рисуются обычной палитрой. */
+export function draw(ctx: CanvasRenderingContext2D, frame: Frame, palette: Record<string, string> = PALETTE): void {
   ctx.clearRect(0, 0, SIZE, SIZE);
   frame.forEach((row, y) => {
     for (let x = 0; x < SIZE; x++) {
-      const c = PALETTE[row[x]];
+      const c = palette[row[x]];
       if (c) {
         ctx.fillStyle = c;
         ctx.fillRect(x, y, 1, 1);
@@ -1137,3 +1214,43 @@ export function litterFrame(clumps = 0, wear = 0): Frame {
 
 /** Маска окна лотка: весь лоток кликабелен — за него и таскают. */
 export const litterMask = (frame: Frame): number[] => hitMask(frame, DECOR);
+
+// Детали и сборка для кадров малыша и подростка (sprite-young.ts): та же палитра и те же мелочи.
+export {
+  frontBody,
+  inhale,
+  HEAD_TOP,
+  HEAD_FLAT,
+  HEAD_BOTTOM,
+  HEAD_MEOW,
+  MOUTH_SMUG,
+  EYES_OPEN,
+  EYES_SHUT,
+  EYES_HAPPY,
+  EYES_SLEEPY,
+  SIT_TAIL,
+  PAWS,
+  SLEEP_TAIL,
+  SLEEP_TAIL_SWAY,
+  BOWL,
+  KIBBLE,
+  HEART,
+  Z_SMALL,
+  Z_BIG,
+  CAKE,
+  PAW_SIDE,
+  STAR,
+  DUST_SMALL,
+  DUST_BIG,
+  FLY,
+  FLY_ORBIT,
+  TONGUE,
+  SCRUFF,
+  TAIL_UP,
+  TAIL_SWAY,
+  TAIL_BACK,
+  TAIL_BACK_FLICK,
+  HANG_FRONT,
+  HANG_BACK,
+  HANG_TAIL,
+};

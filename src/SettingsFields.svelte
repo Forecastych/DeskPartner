@@ -1,8 +1,10 @@
 <script lang="ts">
   // Поля настроек — одни и те же в мастере первого запуска (по шагу на part) и в окне настроек.
   // Вид — из src/ui; здесь только раскладка.
+  import BreedPreview from './BreedPreview.svelte';
+  import { breedName, temper } from './lib/breed';
   import { t } from './lib/i18n';
-  import { CHATTER, HUNTER_AREAS, MODES, NAME_MAX, TOPICS, suggestName, topicName, type Chatter, type HunterArea, type Mode, type Settings, type Topic } from './lib/settings';
+  import { ANIME_TITLES_MAX, BREEDS, CHATTER, HUNTER_AREAS, MODES, NAME_MAX, TOPICS, suggestName, topicName, type Chatter, type HunterArea, type Mode, type Settings, type Topic } from './lib/settings';
   import { Button, Check, Group, Hint, Radio, TextInput } from './ui';
 
   interface Props {
@@ -64,6 +66,19 @@
         </Radio>
       {/each}
     </div>
+  </Group>
+
+  <!-- окрас вместе с характером: в карточке — как она выглядит, под рядом — какая она -->
+  <Group legend={t('Окрас', 'Coat')}>
+    <div class="coats">
+      {#each BREEDS as b}
+        <Radio variant="card" name="breed" value={b} bind:group={settings.breed} {disabled}>
+          <BreedPreview breed={b} />
+          <span class="ui-sr">{breedName(b)}</span>
+        </Radio>
+      {/each}
+    </div>
+    <Hint><b>{breedName(settings.breed)}</b> — {temper(settings.breed)}</Hint>
   </Group>
 
   <TextInput id="name" label={t('Как зовут', 'Name')} bind:value={settings.name} maxlength={NAME_MAX} spellcheck="false" autocomplete="off" {disabled}>
@@ -152,6 +167,49 @@
               : ''}
           </Hint>
         {/if}
+      </div>
+    {/if}
+
+    <Check
+      bind:checked={settings.gameNews}
+      hint={t(
+        'Пишет, когда в игре, в которую ты играешь, вышел патч. Наружу уходит только номер игры в Steam; анонсы — только на языке программы.',
+        "Tells you when a game you play gets a patch. Only the game's Steam number leaves your computer; announcements only in the app's language.",
+      )}
+      {disabled}
+    >
+      {t('Новости любимых игр (Steam)', 'News about games you play (Steam)')}
+    </Check>
+
+    <Check
+      bind:checked={settings.anime}
+      hint={t(
+        'Скажет, когда вышла новая серия. Расписание — из AniList, наружу уходит только твой список.',
+        'Tells you when a new episode is out. The schedule comes from AniList; only your list leaves your computer.',
+      )}
+      {disabled}
+    >
+      {t('Новые серии аниме', 'New anime episodes')}
+    </Check>
+
+    {#if settings.anime}
+      <div class="sub">
+        <!-- id="anime" читают окна: пока человек печатает, настройки не сохраняются на каждую букву -->
+        <TextInput
+          id="anime"
+          label={t('Тайтлы через запятую', 'Titles, comma-separated')}
+          bind:value={settings.animeTitles}
+          maxlength={ANIME_TITLES_MAX}
+          spellcheck="false"
+          autocomplete="off"
+          {disabled}
+        />
+        <Hint>
+          {t(
+            'Названия или ссылки на Shikimori, MyAnimeList, AniList — до 10. Ссылка надёжнее: по-русски AniList знает не всё.',
+            'Titles or links to Shikimori, MyAnimeList, AniList, up to 10. Links are more reliable than titles.',
+          )}
+        </Hint>
       </div>
     {/if}
 
@@ -251,6 +309,18 @@
     display: flex;
     gap: 14px;
     padding: var(--ui-b) calc(var(--ui-b) * 2 + var(--ui-lift)) calc(var(--ui-b) * 2 + var(--ui-lift)) var(--ui-b);
+  }
+  /* пять окрасов не влезут в узкое окно одной строкой с подписями — подпись одна, под рядом */
+  .coats {
+    display: flex;
+    flex-wrap: wrap;
+    /* тень выбранной карточки (контур + подъём) не должна наезжать на соседку */
+    gap: calc(var(--ui-b) * 3);
+    padding: var(--ui-b) calc(var(--ui-b) * 2 + var(--ui-lift)) calc(var(--ui-b) * 2 + var(--ui-lift)) var(--ui-b);
+  }
+  /* 5 × (64 + 4) + 4 × 9 = 376px: ряд влезает и в самое узкое окно настроек (460px) */
+  .coats :global(.card) {
+    padding: 4px 2px;
   }
   .chips {
     display: flex;

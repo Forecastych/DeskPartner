@@ -16,6 +16,7 @@
 // Чистые функции: без DOM и часов, `now` и `rnd` — параметрами. Пока месть идёт, приложение зовёт
 // `tick` вместо `roam.step` (как у клубка); лужу рисует окно "puddle" по `view`.
 
+import { grudgeChance, grudgeMs } from './breed';
 import { PUDDLE_H, PUDDLE_W, SIZE } from './sprite';
 import { EDGE_GAP, WALK, goTo, inRect, monitorOf, side, step, stepAside, surfaces, type Goal, type Monitor, type Pet, type Rect, type RoamEvent, type World } from './roam';
 
@@ -31,6 +32,8 @@ export const COOLDOWN = 15 * MIN;
  * 20 минут): вернувшись, отомстит.
  */
 export const GRUDGE_MS = 30 * MIN;
+/** Короче обида не бывает даже у незлопамятной: запас над 20 минутами сна за краем. */
+export const GRUDGE_FLOOR = 25 * MIN;
 /** Ждёт, пока человек откроет самую важную программу дня, не дольше минуты — потом мстит в то, что открыто. */
 export const PATIENCE = MIN;
 
@@ -148,18 +151,19 @@ const between = (rnd: () => number, lo: number, hi: number): number => lo + roll
 /**
  * Разозлили. Бросок шанса — сразу: обида или есть, или её нет. Не в «Шалостях», на перезарядке
  * или уже обижена — ничего не меняется (обиду не продлевают: она и так полчаса).
+ * `touchy` — обидчивость окраса (breed.ts): и шанс, и срок обиды, срок — не короче GRUDGE_FLOOR.
  */
-export function provoke(r: Revenge, kind: Provocation, now: number, rnd: () => number, mode: string): Revenge {
+export function provoke(r: Revenge, kind: Provocation, now: number, rnd: () => number, mode: string, touchy = 1): Revenge {
   if (mode !== 'pranks' || cooling(r, now) || holds(r, now)) return r;
-  if (roll(rnd) >= CHANCE[kind]) return r;
-  return { ...r, grudge: now + GRUDGE_MS, since: now };
+  if (roll(rnd) >= grudgeChance(CHANCE[kind], touchy)) return r;
+  return { ...r, grudge: now + grudgeMs(GRUDGE_MS, touchy, GRUDGE_FLOOR), since: now };
 }
 
 /** Клик по бодрой кошке (погладили). Набралось PESTER_CLICKS за PESTER_MS — это уже тычки, счёт сначала. */
-export function poked(r: Revenge, now: number, rnd: () => number, mode: string): Revenge {
+export function poked(r: Revenge, now: number, rnd: () => number, mode: string, touchy = 1): Revenge {
   const clicks = [...r.clicks.filter((t) => now - t < PESTER_MS && t <= now), now];
   if (clicks.length < PESTER_CLICKS) return { ...r, clicks };
-  return provoke({ ...r, clicks: [] }, 'pester', now, rnd, mode);
+  return provoke({ ...r, clicks: [] }, 'pester', now, rnd, mode, touchy);
 }
 
 /** Месть из трея dev-сборки: обида сразу, без шанса, перезарядки и ожидания важной программы. */

@@ -26,10 +26,10 @@ mod world;
 
 use hit::{Masks, SPRITE};
 #[cfg(windows)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
-use tracker::{Day, Now, Pace, Tracker};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tracker::{Day, Now, Pace, Totals, Tracker};
 use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
@@ -40,10 +40,11 @@ const ZOOM: f64 = 4.0;
 /// Окна-спрайты на рабочем столе. Порядок — это порядок по глубине: построенное позже
 /// ложится сверху, и кошка, что пришла есть, должна быть перед миской, а не под горкой корма,
 /// а лежак и лоток — под всеми: кошка в них, а не за ними. Мышь — под кошкой: та её догоняет и перекрывает.
-const SPRITES: [&str; 5] = ["bed", "litter", "bowl", "mouse", "pet"];
+/// Подарок (мышка на 100 дней) — тоже под кошкой: она подходит забрать его и встаёт над ним.
+const SPRITES: [&str; 6] = ["bed", "litter", "gift", "bowl", "mouse", "pet"];
 
 /// Кого прячет галочка «Прятать от записи экрана». Точку лазера и её эффекты laser.rs прячет всегда сам.
-const CAPTURED: [&str; 7] = ["bed", "litter", "bowl", "mouse", "pet", "menu", "bubble"];
+const CAPTURED: [&str; 8] = ["bed", "litter", "gift", "bowl", "mouse", "pet", "menu", "bubble"];
 
 /// Что питомец знает о человеке прямо сейчас.
 struct Senses {
@@ -65,6 +66,8 @@ struct SensesNow {
     pace: Pace,
     session_secs: u64,
     active_today_secs: u64,
+    /// Нажатия и путь мыши с запуска — только числа, для достижений.
+    input: Totals,
     #[cfg(windows)]
     quiet: win::Quiet,
     media: media::Media,
@@ -74,6 +77,8 @@ struct SensesNow {
     /// Ноутбук от батареи: кошка спит чаще.
     #[cfg(windows)]
     battery: bool,
+    /// Активное окно — игра: про патчи в самой игре не говорим.
+    game: bool,
 }
 
 /// Маска текущего кадра того окна, которое её прислало.
@@ -102,6 +107,7 @@ fn senses(s: State<'_, Arc<Senses>>) -> SensesNow {
         pace: t.pace(),
         session_secs: t.session_secs(at),
         active_today_secs: t.day.active_seconds,
+        input: t.totals(),
         #[cfg(windows)]
         quiet: win::quiet(),
         media: s.media.lock().unwrap().clone(),
@@ -109,6 +115,7 @@ fn senses(s: State<'_, Arc<Senses>>) -> SensesNow {
         call: s.call.load(Ordering::Relaxed),
         #[cfg(windows)]
         battery: win::on_battery(),
+        game: news::releases::in_game(),
     }
 }
 
@@ -129,12 +136,18 @@ fn start_senses(s: Arc<Senses>, pet: AppHandle) {
         .name("senses-tick".into())
         .spawn(move || {
             let mut fg = win::Foreground::new();
+            let mut games = news::releases::Watch::new();
             let mut bin = win::bin_items();
             for n in 0u64.. {
                 std::thread::sleep(std::time::Duration::from_secs(1));
                 let app = fg.current();
                 // закончившийся день пока выбрасываем: хранилища ещё нет
-                let _ = s.tracker.lock().unwrap().tick(&Now::local(), app.as_deref());
+                let idle = {
+                    let mut t = s.tracker.lock().unwrap();
+                    let _ = t.tick(&Now::local(), app.as_deref());
+                    t.idle(Instant::now())
+                };
+                games.tick(fg.path(), !idle);
                 *s.app.lock().unwrap() = app;
                 // реестр и снимок процессов — через тик: фронтенд и сам спрашивает раз в 2 с
                 if n % CALL_TICKS == 0 {
@@ -184,7 +197,7 @@ fn build_sprite_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWin
     b.build()
 }
 
-/// Питомец, миска, лежак, лоток и мышь, у каждого свой поток прозрачности для кликов.
+/// Питомец, миска, лежак, лоток, подарок и мышь, у каждого свой поток прозрачности для кликов.
 fn open_sprites(app: &AppHandle) -> tauri::Result<()> {
     let masks = app.state::<Arc<Masks>>().inner().clone();
     // лужа мести — до спрайтов: так она ложится под кошку
@@ -339,7 +352,26 @@ async fn name_pet(app: AppHandle, name: String) {
     }
 }
 
-/// «Босс идёт»: спрятать питомца, миску, лежак, мышь и лужу или вернуть их. Облачко и меню
+/// Конец помодоро, мс Unix-времени; 0 — фокуса нет. Присылает окно кошки (set_focus): в трее тогда
+/// «Отменить фокус» с остатком минут вместо «Фокус 25 минут». Сам фокус живёт в окне кошки.
+static FOCUS_UNTIL: AtomicU64 = AtomicU64::new(0);
+
+/// Окно кошки начало (`until` — когда кончится) или кончило помодоро (0).
+#[tauri::command]
+fn set_focus(until: u64) {
+    FOCUS_UNTIL.store(until, Ordering::Relaxed);
+}
+
+/// Минут до конца фокуса с округлением вверх; None — фокуса нет или он уже кончился.
+fn focus_left(until: u64, now: u64) -> Option<u64> {
+    (until > now).then(|| (until - now).div_ceil(60_000))
+}
+
+fn unix_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+/// «Босс идёт»: спрятать питомца, миску, лежак, лоток, подарок, мышь и лужу или вернуть их. Облачко и меню
 /// окно кошки убирает само, получив "boss"; на это время оно молчит.
 #[cfg(windows)]
 fn boss(app: &AppHandle) {
@@ -367,7 +399,7 @@ fn tray_items() -> Vec<menu::Item> {
         disabled: false,
     };
     let mut items = Vec::new();
-    // проверить облачко, голод, мышь, клубок, новость, месть, лоток и муху, не дожидаясь сроков; в релиз не попадает
+    // проверить облачко, голод, мышь, клубок, новость, месть, лоток, муху и подарок, не дожидаясь сроков; в релиз не попадает
     if cfg!(debug_assertions) {
         items.extend([
             entry("dev-say", "Say something (dev)", None),
@@ -381,6 +413,10 @@ fn tray_items() -> Vec<menu::Item> {
             // лоток выключен — включит
             entry("dev-litter", "Litter (dev)", None),
             entry("dev-fly", "Fly (dev)", None),
+            // подарок на 100 дней без 2400 часов и мимо отметки «уже дарила»
+            entry("dev-gift", "Gift (dev)", None),
+            // момент роста, который пора показать; не пора — малыш, подросток, взрослая подряд
+            entry("dev-grow", "Grow (dev)", None),
             menu::Item::Separator { separator: true },
         ]);
     }
@@ -389,6 +425,14 @@ fn tray_items() -> Vec<menu::Item> {
         // шапка с именем, как в меню кошки; ведёт в статистику
         items.extend([entry("stats", &name, None), menu::Item::Separator { separator: true }]);
     }
+    // помодоро: идёт — отменить, нет — включить; то же в меню кошки (lib/pomodoro.ts)
+    items.push(match focus_left(FOCUS_UNTIL.load(Ordering::Relaxed), unix_ms()) {
+        Some(m) => {
+            let hint = if i18n::en() { format!("{m} min left") } else { format!("ещё {m} мин") };
+            entry("focus-cancel", tr("Отменить фокус", "Cancel focus"), Some(&hint))
+        }
+        None => entry("focus", tr("Фокус 25 минут", "Focus for 25 minutes"), Some(tr("кошка поспит на таймере", "the cat naps on a timer"))),
+    });
     items.extend([
         // кошка умеет уходить за край экрана — отсюда её зовут обратно
         entry("call", tr("Позвать питомца", "Call your pet"), Some(tr("если ушла за край экрана", "if she wandered off screen"))),
@@ -424,7 +468,7 @@ pub(crate) fn tray_pick(app: &AppHandle, id: &str) {
                 eprintln!("update: {err}");
             }
         }
-        "call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn" | "dev-news" | "dev-revenge" | "dev-litter" | "dev-fly" => {
+        "call" | "adopt" | "focus" | "focus-cancel" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn" | "dev-news" | "dev-revenge" | "dev-litter" | "dev-fly" | "dev-gift" | "dev-grow" => {
             if let Err(err) = app.emit_to("pet", id, ()) {
                 eprintln!("{id}: {err}");
             }
@@ -498,6 +542,7 @@ pub fn run() {
             relaunch,
             i18n::lang,
             name_pet,
+            set_focus,
             menu::open_menu,
             menu::menu_size,
             menu::menu_pick,
@@ -529,6 +574,9 @@ pub fn run() {
             news::news_vote,
             news::news_status,
             news::news_refresh,
+            news::releases::releases_setup,
+            news::releases::release_pick,
+            news::releases::open_link,
             update::set_updates,
             update::install_update,
         ])
@@ -566,4 +614,18 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("не удалось запустить DeskPartner");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focus_minutes_round_up_and_end() {
+        assert_eq!(focus_left(0, 1_000), None);
+        assert_eq!(focus_left(1_000, 1_000), None);
+        assert_eq!(focus_left(25 * 60_000, 0), Some(25));
+        assert_eq!(focus_left(25 * 60_000, 1), Some(25));
+        assert_eq!(focus_left(60_000, 59_999), Some(1));
+    }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanName, defaults, NAME_MAX, NAMES, parse, serialize, suggestName } from './settings';
+import { ANIME_TITLES_MAX, BREEDS, cleanName, defaults, NAME_MAX, NAMES, parse, releasesSetup, serialize, suggestName } from './settings';
 
 describe('настройки', () => {
   it('по умолчанию осторожная версия, но от записи экрана прячемся', () => {
@@ -34,6 +34,14 @@ describe('настройки', () => {
     expect(s).toMatchObject({ feeder: true, bed: false, mode: 'calm', chatter: 'sometimes', topics: ['космос'], tmdbKey: 'k' });
   });
 
+  it('окрас: по умолчанию серая, у старых настроек без поля — тоже; мусор — серая, остальное живёт', () => {
+    expect(defaults().breed).toBe('tabby');
+    expect(parse(JSON.stringify({ feeder: true })).breed).toBe('tabby');
+    for (const b of BREEDS) expect(parse(JSON.stringify({ breed: b })).breed).toBe(b);
+    expect(parse(JSON.stringify({ breed: 'siamese', feeder: true }))).toMatchObject({ breed: 'tabby', feeder: true });
+    expect(parse(JSON.stringify({ breed: 3 })).breed).toBe('tabby');
+  });
+
   it('охотник: битое поле — по умолчанию, остальное живёт', () => {
     expect(parse(JSON.stringify({ hunter: true, hunterArea: 'screen' }))).toMatchObject({ hunter: true, hunterArea: 'screen' });
     expect(parse(JSON.stringify({ hunter: 'да', hunterArea: 'desk', feeder: true }))).toMatchObject({
@@ -63,5 +71,31 @@ describe('настройки', () => {
 
   it('темы — в порядке списка и без повторов', () => {
     expect(parse(JSON.stringify({ topics: ['космос', 'кино', 'космос'] })).topics).toEqual(['кино', 'космос']);
+  });
+
+  it('форма: по умолчанию взрослая, чужое значение не проходит', () => {
+    expect(defaults().form).toBe('adult');
+    expect(parse(JSON.stringify({ form: 'kitten' })).form).toBe('kitten');
+    expect(parse(JSON.stringify({ form: 'teen' })).form).toBe('teen');
+    expect(parse(JSON.stringify({ form: 'dragon' })).form).toBe('adult');
+    expect(parse(JSON.stringify({ lang: 'ru' })).form).toBe('adult');
+  });
+
+  it('игры и серии: по умолчанию выключены, список тайтлов обрезан', () => {
+    expect(defaults()).toMatchObject({ gameNews: false, anime: false, animeTitles: '' });
+    expect(parse(JSON.stringify({ gameNews: true, anime: true, animeTitles: '  Фрирен, One Piece  ' }))).toMatchObject({
+      gameNews: true,
+      anime: true,
+      animeTitles: 'Фрирен, One Piece',
+    });
+    expect(parse(JSON.stringify({ gameNews: 'да', anime: 1, animeTitles: 7 }))).toMatchObject({ gameNews: false, anime: false, animeTitles: '' });
+    expect(parse(JSON.stringify({ animeTitles: 'а'.repeat(5000) })).animeTitles).toHaveLength(ANIME_TITLES_MAX);
+  });
+
+  it('в Rust уходит список тайтлов, только пока галочка стоит', () => {
+    const s = { ...defaults(), gameNews: true, animeTitles: ' Фрирен ' };
+    expect(releasesSetup(s)).toEqual({ steam: true, anime: '' });
+    expect(releasesSetup({ ...s, anime: true })).toEqual({ steam: true, anime: 'Фрирен' });
+    expect(releasesSetup(defaults())).toEqual({ steam: false, anime: '' });
   });
 });

@@ -23,6 +23,8 @@ export const COUNTERS = [
   'naps',
   /** Разбудили кликом, тряской или взяли на руки спящую. */
   'woken',
+  /** Досидела помодоро до конца: проспала на таймере все 25 минут (pomodoro.ts). */
+  'focuses',
   'mice',
   /** Вернулась из-за края облизываясь. */
   'caught',
@@ -39,6 +41,10 @@ export const COUNTERS = [
   'cakes',
   /** Сколько годовщин уже отмечено. */
   'years',
+  /** Нажатий клавиш за всё время программы (без автоповтора): только число, какие — не знаем. */
+  'keys',
+  /** Сколько мышь проехала, мм — примерно: датчик считаем за 800 DPI (tracker.rs). */
+  'mouseMm',
 ] as const;
 export type Counter = (typeof COUNTERS)[number];
 
@@ -99,6 +105,27 @@ export function tick(s: Stats, ms: number, home: boolean, film: boolean, hour = 
   return n;
 }
 
+/** Итоги ввода с запуска программы: их отдаёт Rust (`senses`). */
+export interface Input {
+  keys: number;
+  mouse_mm: number;
+}
+
+/**
+ * Дописать к статистике ввод с прошлого опроса. `prev` — прошлые итоги (null — первый опрос:
+ * засчитываем всё с запуска). Итоги меньше прошлых — счёт начался заново, берём их целиком.
+ */
+export function absorb(s: Stats, prev: Input | null, cur: Input): Stats {
+  const add = (was: number | undefined, now: number) => {
+    const v = Number.isFinite(now) && now > 0 ? Math.floor(now) : 0;
+    return was === undefined || v < was ? v : v - was;
+  };
+  const keys = add(prev?.keys, cur.keys);
+  const mm = add(prev?.mouse_mm, cur.mouse_mm);
+  if (!keys && !mm) return s;
+  return { ...s, keys: s.keys + keys, mouseMm: s.mouseMm + mm };
+}
+
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
@@ -132,6 +159,22 @@ export function date(ms: number): string {
   const d = new Date(ms);
   if (lang() === 'en') return `${MONTHS_EN[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+/** «64 200»: тысячи через неразрывный пробел (по-английски — запятая), без Intl. */
+export function grouped(n: number): string {
+  const s = String(Math.max(0, Math.floor(n)));
+  return s.replace(/\B(?=(\d{3})+(?!\d))/g, t(' ', ','));
+}
+
+/** Путь мыши: «50 см», «805 м», «3,4 км» (3.4 km), «42 км». Меньше 10 км — с десятыми. */
+export function distance(mm: number): string {
+  if (mm < 1000) return t(`${Math.floor(mm / 10)} см`, `${Math.floor(mm / 10)} cm`);
+  if (mm < 1_000_000) return t(`${Math.floor(mm / 1000)} м`, `${Math.floor(mm / 1000)} m`);
+  const km = mm / 1_000_000;
+  if (km >= 10) return `${grouped(km)}${t(' км', ' km')}`;
+  const tenth = (Math.floor(km * 10) / 10).toFixed(1);
+  return t(`${tenth.replace('.', ',')} км`, `${tenth} km`);
 }
 
 export interface Row {
@@ -184,6 +227,7 @@ export function groups(s: Stats, now: number): Group[] {
       rows: [
         { label: t('Уснула', 'Naps'), value: times(s.naps) },
         { label: t('Разбудили', 'Woken up'), value: times(s.woken) },
+        { label: t('Спала на фокусе', 'Focus naps'), value: times(s.focuses) },
       ],
     },
     {
@@ -192,6 +236,13 @@ export function groups(s: Stats, now: number): Group[] {
         { label: t('Мыши', 'Mice'), value: `${s.mice}`, hint: caught },
         { label: t('Клубки', 'Yarn balls'), value: `${s.yarns}` },
         { label: t('Лазерная указка', 'Laser pointer'), value: times(s.lasers) },
+      ],
+    },
+    {
+      title: t('За компьютером', 'At the computer'),
+      rows: [
+        { label: t('Нажатий клавиш', 'Key presses'), value: grouped(s.keys) },
+        { label: t('Мышкой проехали', 'Mouse travel'), value: `≈${distance(s.mouseMm)}` },
       ],
     },
     {
