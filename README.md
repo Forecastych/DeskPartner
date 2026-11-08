@@ -24,10 +24,16 @@
 - **Hunts** a pixel mouse and a laser pointer: hold `Ctrl` on its own for a moment and the cursor turns into a red dot.
 - **Plays with yarn** now and then.
 - **Talks rarely**: a speech bubble every 10 to 30 minutes, with a fact, a "this day in history" note or a headline on the topics you picked.
+- **Has a coat and a character**: grey tabby, ginger, black, tuxedo or calico. Each one sleeps, chats, plays and takes offence a little differently.
+- **Grows up**: she starts as a kitten, becomes a teen after 15 days together and a grown cat after a month. Days count only while she is on screen with you. Once she is grown, you can pick any of the three looks in Settings.
+- **Keeps you company while you focus**: pick "Focus for 25 minutes" in her menu or the tray, and she naps next to an hourglass without bothering you. When time is up, she stretches and calls you for a 5-minute break, with a laser game if you like.
+- **Earns awards and outfits**: milestones like the first ten pets or ten kilometres of mouse travel unlock a bow, a bandana, a bell, a beanie and a crown. Pick what she wears in Stats.
+- **Keeps a diary**: every evening a short entry about the day in her own words, in Stats.
+- **Brings you a present** after 100 days together: a mouse, whole and clean. Accept it and it stays as a trophy, or turn it down and she takes it away, offended.
 
 Clicks pass through everything except the cat herself, her bowl, bed and speech bubble. She never takes keyboard focus, and she disappears while a game or video runs in exclusive fullscreen.
 
-She does not show up in screenshots or screen recordings (you can change that). The livelier extras are off by default and wait in Settings: a bed, an auto-feeder, chasing your cursor, news, film reviews.
+She does not show up in screenshots or screen recordings (you can change that). The livelier extras are off by default and wait in Settings: a bed, an auto-feeder, chasing your cursor, news, film reviews, game patches and new anime episodes.
 
 ## Install
 
@@ -66,7 +72,11 @@ To uninstall, use "Installed apps" in Windows Settings. Your data folder stays w
   - "This day in history" from Wikipedia: today's date and the language;
   - news headlines: RSS feeds of the topics you picked (The Guardian, BBC and others);
   - film reviews: the film title goes to Wikidata and Wikipedia;
-  - TMDB: only with your own API key.
+  - TMDB: only with your own API key;
+  - game patches: the Steam app IDs of the five games you play most go to Steam. She recognises a game by its program file, not by the window title; the list of games stays on your computer and is wiped when you turn the feature off;
+  - new anime episodes: the titles you typed in Settings go to AniList.
+
+"Look" under a game or anime bubble opens only Steam Store and AniList pages in your browser.
 
 All her data lives in the folder you chose, as plain JSON files.
 
@@ -89,12 +99,20 @@ npm test
 cd src-tauri && cargo test
 ```
 
+Every pose at once: run `npm run dev` and open `http://localhost:1432/sprite-preview.html`. Pick an age, coat, season and outfit, and check both directions on light and dark backgrounds, with the click mask on top if you like.
+
 Built with [Tauri 2](https://tauri.app/), Rust and [Svelte 5](https://svelte.dev/). All pixel art is drawn in code.
 
 ## Feedback
 
 - No GitHub account? Use the [form on the website](https://forecastych.github.io/DeskPartner/#reviews).
 - Found a bug or have an idea? [Open an issue](https://github.com/Forecastych/DeskPartner/issues/new/choose). English or Russian, both are fine.
+
+## Thanks
+
+People who helped make DeskPartner better:
+
+- **[makedev102](https://github.com/makedev102)**: the pose preview page and the sprite checks come from the [DeskRat](https://github.com/makedev102/DeskRat) fork, and so does a fix for the folder write check.
 
 ## License
 
