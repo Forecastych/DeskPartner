@@ -191,8 +191,9 @@ describe('wardrobe', () => {
           for (const w of WEARS) {
             const d = dress(f, w);
             if (d.length !== SIZE || d.some((r) => r.length !== SIZE)) bad.push(`${i} ${name}#${n} ${w}: размер`);
-            // голова анфас есть везде, кроме «з-з-з»; ошейник и платок может закрыть бортик лежака
-            else if (name !== 'zzz' && !WEAR_ART[w].under && d.every((r, y) => r === f[y])) bad.push(`${i} ${name}#${n} ${w}: не надет`);
+            // голова анфас есть везде, кроме «з-з-з»; ошейник и платок может закрыть бортик лежака.
+            // За шкирку голова у самого верха кадра: что не влезает, не надевается (sprite-qa.test.ts)
+            else if (name !== 'zzz' && name !== 'carried' && !WEAR_ART[w].under && d.every((r, y) => r === f[y])) bad.push(`${i} ${name}#${n} ${w}: не надет`);
           }
         });
     expect(bad).toEqual([]);

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DeskPartner — все позы</title>
+<!--
+  Dev-превью всех поз: `npm run dev`, затем http://localhost:1432/sprite-preview.html.
+  В сборку не попадает: Vite собирает только index.html. Идея и раскладка страницы — из форка
+  DeskRat (github.com/makedev102/DeskRat), см. README.
+-->
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 20px auto; padding: 0 20px; max-width: 1400px; background: #efedf2; color: #302c38; font: 14px/1.5 system-ui; }
+  h1 { margin-bottom: 4px; font-size: 24px; } h2 { font-size: 15px; margin: 0 0 6px; }
+  p { margin: 4px 0 14px; } label, button { margin-right: 10px; }
+  select, button { font: inherit; padding: 4px 8px; } button { cursor: pointer; }
+  .controls { position: sticky; top: 0; z-index: 1; padding: 10px; background: #efedf2f5; border-bottom: 1px solid #cbc5d3; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  main { display: grid; grid-template-columns: repeat(4, minmax(290px, 1fr)); gap: 14px; margin-top: 18px; }
+  article { min-width: 0; } article[hidden] { display: none; }
+  .stage { padding: 8px; margin-bottom: 6px; border-radius: 8px; }
+  .light { background: #fffdfa; color: #605968; } .dark { background: #252735; color: #d3cedd; }
+  .pair { display: flex; justify-content: space-around; gap: 8px; }
+  figure { margin: 0; text-align: center; } canvas { display: block; image-rendering: pixelated; }
+  .large { width: 128px; height: 128px; } .small { width: 32px; height: 32px; margin: 2px auto; }
+  figcaption, output { font-size: 12px; } .scrub { width: 65%; vertical-align: middle; }
+  @media (max-width: 1300px) { main { grid-template-columns: repeat(3, minmax(290px, 1fr)); } }
+  @media (max-width: 1000px) { main { grid-template-columns: repeat(2, minmax(290px, 1fr)); } }
+  @media (max-width: 650px) { main { grid-template-columns: 1fr; } }
+</style>
+<h1>DeskPartner — все позы</h1>
+<p>Кадры приложения, 32×32: оба направления, 4× и 1×, светлый и тёмный фон. Наряд, окрас и зеркало накладываются в том же порядке, что в App.svelte.</p>
+<div class="controls">
+  <label>Возраст <select id="stage"><option value="0">Малыш</option><option value="1">Подросток</option><option value="2" selected>Взрослая</option></select></label>
+  <label>Окрас <select id="breed"></select></label>
+  <label>Жирок <select id="fat"><option value="0">0 — лето</option><option value="1" selected>1 — межсезонье</option><option value="2">2 — зима</option></select></label>
+  <label>Наряд <select id="outfit"><option value="">Без наряда</option></select></label>
+  <label>Показать <select id="group"><option value="all">Все</option><option value="motion">Движение</option><option value="rest">Отдых и перенос</option><option value="reaction">Еда и реакции</option><option value="item">Вещи</option></select></label>
+  <button id="pause">Пауза</button><button id="step">Следующий кадр</button><button id="reset">С начала</button>
+  <label><input id="mask" type="checkbox"> Маска клика / опора / загривок</label>
+</div>
+<main></main>
+<script type="module">
+  import { ANIMS, MOUSE_ANIMS, PUDDLE_FRAMES, SIZE, SCRUFF_AT, OUTFITS, draw, dress, flip, ground, hitMask, bedMask, bedFrame, bowlFrame, litterFrame, litterMask, LITTER_CLUMPS } from '/src/lib/sprite.ts';
+  import { animsFor } from '/src/lib/growth.ts';
+  import { palette, paint } from '/src/lib/coat.ts';
+  import { BREEDS } from '/src/lib/settings.ts';
+  const $ = (id) => document.getElementById(id);
+  for (const b of BREEDS) $('breed').add(new Option(b, b));
+  for (const o of Object.keys(OUTFITS)) $('outfit').add(new Option(o, o));
+
+  const motion = ['stand', 'walk', 'jump', 'run', 'crouch', 'skid', 'bonk', 'fall', 'strut', 'stretch'];
+  const rest = ['sit', 'loaf', 'sideLoaf', 'sleep', 'bed', 'carried', 'faceplant', 'sidePlant', 'zzz'];
+  const names = {
+    stand: 'Стоит', walk: 'Шагает', jump: 'Прыгает', run: 'Бежит', crouch: 'Припадает', skid: 'Занос', bonk: 'Столкновение', fall: 'Падает',
+    sit: 'Сидит', loaf: 'Буханка', sideLoaf: 'Лежит на боку', sleep: 'Спит на рамке', bed: 'Спит в лежаке', stretch: 'Потягивается',
+    carried: 'За шкирку', faceplant: 'Носом в лапки', sidePlant: 'Дремлет на полу', hungry: 'Просит еду', eat: 'Ест', groom: 'Умывается',
+    petted: 'Гладят', groggy: 'Просыпается', angry: 'Сердится', squat: 'Приседает', smug: 'Довольна', potty: 'В лотке', dig: 'Закапывает',
+    strut: 'Уходит довольная', lick: 'Облизывается', pose: 'Снимок экрана', crunch: 'Очистка корзины', cake: 'Праздник',
+    flyWatch: 'Следит за мухой', snap: 'Ловит муху', chew: 'Жуёт', announce: 'Новость', squint: 'Щурится', zzz: 'Спит за экраном',
+  };
+  // вещи рисуются обычной палитрой и без наряда; маска у мыши, клубка и лужи пустая — клики сквозь них
+  const items = {
+    mouseRun: { label: 'Мышь · бег', mask: 'none', ...MOUSE_ANIMS.run },
+    mouseSit: { label: 'Мышь · сидит', mask: 'none', ...MOUSE_ANIMS.sit },
+    yarn: { label: 'Клубок', mask: 'none', ...MOUSE_ANIMS.yarn },
+    bowl: { label: 'Миска · 0 / 1 / 2 / 4 / 6 порций', ms: 800, frames: [0, 1, 2, 4, 6].map(bowlFrame) },
+    bedItem: { label: 'Лежак', mask: 'decor', ms: 1500, frames: [bedFrame()] },
+    litter: { label: `Лоток · 0…${LITTER_CLUMPS} комков`, mask: 'litter', ms: 700, frames: Array.from({ length: LITTER_CLUMPS + 1 }, (_, c) => litterFrame(c)) },
+    puddle: { label: 'Лужа · все стадии', mask: 'none', ms: 700, frames: PUDDLE_FRAMES },
+  };
+  const kit = () => animsFor(Number($('stage').value), Number($('fat').value));
+  const animation = (name) => items[name] ?? kit()[name];
+
+  const views = [], cards = [];
+  let elapsed = 0, last = performance.now(), paused = false;
+  function pause() { paused = true; $('pause').textContent = 'Продолжить'; }
+  for (const name of [...Object.keys(ANIMS[0]), ...Object.keys(items)]) {
+    const item = items[name], group = item ? 'item' : motion.includes(name) ? 'motion' : rest.includes(name) ? 'rest' : 'reaction';
+    const article = document.createElement('article');
+    article.dataset.group = group;
+    const a = animation(name);
+    article.innerHTML = `<h2>${item?.label ?? names[name] ?? name} · ${name}</h2><div><input class="scrub" type="range" min="0" max="${a.frames.length - 1}" value="0" aria-label="Кадр ${name}"> <output></output></div>`;
+    const slider = article.querySelector('input'), output = article.querySelector('output');
+    const card = { article, name, slider, output, manual: null, index: 0 };
+    slider.oninput = () => { pause(); card.manual = Number(slider.value); render(); };
+    cards.push(card);
+    for (const theme of ['light', 'dark']) {
+      const stage = document.createElement('div'); stage.className = `stage ${theme}`;
+      const pair = document.createElement('div'); pair.className = 'pair';
+      for (const facing of [-1, 1]) {
+        const figure = document.createElement('figure');
+        for (const scale of ['large', 'small']) {
+          const canvas = document.createElement('canvas'); canvas.width = canvas.height = SIZE; canvas.className = scale;
+          figure.append(canvas); views.push({ canvas, card, facing });
+        }
+        const caption = document.createElement('figcaption'); caption.textContent = facing === -1 ? '← 4× / 1×' : '→ 4× / 1×';
+        figure.append(caption); pair.append(figure);
+      }
+      stage.append(pair); article.append(stage);
+    }
+    document.querySelector('main').append(article);
+  }
+
+  // тот же порядок, что в App.svelte: наряд → окрас → зеркало; «з-з-з» — буквы, их не зеркалят
+  function decorate(frame, name, facing) {
+    const f = name in items ? frame : paint(dress(frame, $('outfit').value || null), $('breed').value);
+    return facing === -1 && name !== 'zzz' ? flip(f) : f;
+  }
+  function mask(frame, name) {
+    const kind = items[name]?.mask;
+    if (kind === 'none') return Array(SIZE).fill(0);
+    if (kind === 'decor') return bedMask(frame);
+    if (kind === 'litter') return litterMask(frame);
+    return hitMask(frame);
+  }
+  function paintCanvas(canvas, frame, name, facing) {
+    const ctx = canvas.getContext('2d');
+    draw(ctx, frame, name in items ? undefined : palette($('breed').value));
+    if (!$('mask').checked) return;
+    ctx.fillStyle = '#32c6bd88';
+    mask(frame, name).forEach((bits, y) => { for (let x = 0; x < SIZE; x++) if ((bits >>> x) & 1) ctx.fillRect(x, y, 1, 1); });
+    if (!(name in items)) { ctx.fillStyle = '#ff9933aa'; ctx.fillRect(0, ground(name), SIZE, 1); }
+    if (name === 'carried') {
+      const x = facing === -1 ? SIZE - 1 - Math.floor(SCRUFF_AT[0]) : Math.floor(SCRUFF_AT[0]);
+      ctx.fillStyle = '#ff3939'; ctx.fillRect(x - 1, 0, 2, 1);
+    }
+  }
+  function render() {
+    for (const card of cards) {
+      const a = animation(card.name), index = card.manual ?? Math.floor(elapsed / a.ms) % a.frames.length;
+      card.index = index; card.slider.max = a.frames.length - 1; card.slider.value = index;
+      card.output.textContent = `${index + 1}/${a.frames.length} · ${a.ms} мс`;
+      card.article.hidden = $('group').value !== 'all' && card.article.dataset.group !== $('group').value;
+    }
+    for (const { canvas, card, facing } of views) {
+      if (card.article.hidden) continue;
+      paintCanvas(canvas, decorate(animation(card.name).frames[card.index], card.name, facing), card.name, facing);
+    }
+  }
+  $('pause').onclick = () => { paused = !paused; $('pause').textContent = paused ? 'Продолжить' : 'Пауза'; if (!paused) cards.forEach((c) => (c.manual = null)); };
+  $('step').onclick = () => { pause(); cards.forEach((c) => (c.manual = (c.index + 1) % animation(c.name).frames.length)); render(); };
+  $('reset').onclick = () => { elapsed = 0; cards.forEach((c) => (c.manual = null)); render(); };
+  // у малыша и взрослой разное число кадров в позе: ручной кадр мог выйти за край
+  for (const id of ['stage', 'fat']) $(id).onchange = () => { cards.forEach((c) => (c.manual = null)); render(); };
+  for (const id of ['breed', 'outfit', 'group', 'mask']) $(id).onchange = render;
+  function tick(now) { if (!paused) elapsed += Math.max(0, now - last); last = now; render(); requestAnimationFrame(tick); }
+  render(); requestAnimationFrame(tick);
+</script>
+</html>

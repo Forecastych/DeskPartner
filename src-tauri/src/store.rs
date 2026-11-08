@@ -50,19 +50,32 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    let mut f = fs::File::create(&tmp)?;
-    f.write_all(bytes)?;
-    // без sync_all при отключении питания переименование может пережить данные
-    f.sync_all()?;
-    drop(f);
-    fs::rename(&tmp, path)
+    let written = (|| {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        // без sync_all при отключении питания переименование может пережить данные
+        f.sync_all()?;
+        drop(f);
+        fs::rename(&tmp, path)
+    })();
+    // оборвалась — недописанный .tmp не оставляем
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written
 }
 
 /// Проверка записью, а не по атрибутам: права, OneDrive и антивирус узнаются только так.
+/// Файл пробы только свой и только новый: чужой `.probe` в выбранной папке не перезаписываем и не удаляем.
 fn probe(dir: &Path) -> Result<(), String> {
     const BODY: &[u8] = b"DeskPartner";
-    let file = dir.join(".probe");
-    let ok = fs::write(&file, BODY).is_ok() && fs::read(&file).is_ok_and(|b| b == BODY);
+    let file = dir.join(format!(".deskpartner-probe-{}", std::process::id()));
+    let Ok(mut f) = fs::OpenOptions::new().write(true).create_new(true).open(&file) else {
+        return Err(tr("в эту папку не получается писать", "can't write to this folder").into());
+    };
+    let ok = f.write_all(BODY).and_then(|_| f.sync_all()).is_ok();
+    drop(f);
+    let ok = ok && fs::read(&file).is_ok_and(|b| b == BODY);
     let removed = fs::remove_file(&file).is_ok();
     if ok && removed {
         Ok(())
@@ -331,7 +344,7 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&loc).unwrap()).unwrap();
         assert_eq!(v, serde_json::json!({ "dir": dir.to_str().unwrap() }));
         // проба за собой убрала, временных файлов не осталось
-        assert!(!dir.join(".probe").exists());
+        assert!(fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains("probe")));
         assert!(!loc.with_extension("json.tmp").exists());
         save(Some(&dir), "belly", r#"{"full":0.5}"#).unwrap();
         assert_eq!(load(Some(&dir), "belly").unwrap().as_deref(), Some(r#"{"full":0.5}"#));
@@ -394,6 +407,16 @@ mod tests {
         assert_eq!(read_dir(&loc), Some(old.clone()));
         assert_eq!((get(&old, "belly").as_deref(), get(&old, "sleep").as_deref()), (Some("b"), Some("s")));
         assert_eq!(get(&new, "belly"), None);
+    }
+
+    #[test]
+    fn probe_leaves_foreign_probe_alone() {
+        let t = Tmp::new();
+        let dir = t.0.join("общая папка");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(".probe"), "чужое").unwrap();
+        set_dir(&t.0.join("location.json"), dir.to_str().unwrap()).unwrap();
+        assert_eq!(fs::read_to_string(dir.join(".probe")).unwrap(), "чужое");
     }
 
     #[test]

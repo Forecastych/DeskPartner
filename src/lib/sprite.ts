@@ -672,6 +672,8 @@ function stretching(fat: Fat, mouth: Part): Frame {
     [ARM, 19, 27],
     [ARM, 21, 29],
     [head(EYES_SHUT, mouth), 19, 17],
+    // шов между подбородком и лапой: иначе сквозь кошку просвечивает пиксель стола
+    [['k'], 20, 26],
   );
 }
 
@@ -887,7 +889,8 @@ function build(fat: Fat) {
       frames: [
         digging(fat, slantLeg(5, 1)[0], FRONT[1] + 1, 3),
         digging(fat, leg(5), FRONT[1] + 4, 2),
-        digging(fat, slantLeg(5, -1)[0], FRONT[1] - 1, 2, [[SPRAY_A, 23, 23]]),
+        // наполнитель на клетку дальше от лапы: вплотную он запирал прозрачную дырку
+        digging(fat, slantLeg(5, -1)[0], FRONT[1] - 1, 2, [[SPRAY_A, 24, 23]]),
         digging(fat, leg(4), FRONT[1], 3, [[SPRAY_B, 23, 23]]),
       ].map(inLitter(fat)),
     },
@@ -1019,7 +1022,7 @@ export function crownAt(frame: Frame): [number, number] | null {
   return k >= 0 ? [frame[k].indexOf(KIT_CROWN_ROW) - 1, k] : null;
 }
 
-const OUTFITS: Record<Outfit, Piece> = {
+export const OUTFITS: Record<Outfit, Piece> = {
   hat: { rows: hat, dy: -hat.length },
   pumpkin: { rows: pumpkin, dy: -pumpkin.length },
   ...WEAR_ART,
@@ -1035,6 +1038,9 @@ export function dress(frame: Frame, outfit: Outfit | null): Frame {
   if (!at) return frame;
   const [x, y] = at;
   const { rows, dy, under } = OUTFITS[outfit];
+  // за шкирку голова у самого верха кадра: обрезанная шапка поверх загривка хуже никакой
+  const off = rows.some((row, i) => [...row].some((c, dx) => c !== '.' && (y + dy + i < 0 || y + dy + i >= SIZE || x + dx < 0 || x + dx >= SIZE)));
+  if (off) return frame;
   const g = frame.map((r) => [...r]);
   rows.forEach((row, i) => {
     const ty = y + dy + i;
