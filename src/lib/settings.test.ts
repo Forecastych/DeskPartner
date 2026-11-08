@@ -4,7 +4,7 @@ import { cleanName, defaults, NAME_MAX, NAMES, parse, serialize, suggestName } f
 describe('настройки', () => {
   it('по умолчанию осторожная версия, но от записи экрана прячемся', () => {
     const d = defaults();
-    expect(d).toMatchObject({ feeder: false, bed: false, gameWindow: false, sites: false, reviews: false, hideFromCapture: true });
+    expect(d).toMatchObject({ feeder: false, bed: false, litter: false, gameWindow: false, sites: false, reviews: false, hideFromCapture: true });
     expect(d).toMatchObject({ mode: 'calm', chatter: 'sometimes', topics: [], tmdbKey: '' });
     // охотник выключен; включили — по панели задач
     expect(d).toMatchObject({ hunter: false, hunterArea: 'taskbar' });

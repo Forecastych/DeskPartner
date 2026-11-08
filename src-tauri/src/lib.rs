@@ -39,11 +39,11 @@ const ZOOM: f64 = 4.0;
 
 /// Окна-спрайты на рабочем столе. Порядок — это порядок по глубине: построенное позже
 /// ложится сверху, и кошка, что пришла есть, должна быть перед миской, а не под горкой корма,
-/// а лежак — под всеми: кошка в нём, а не за ним. Мышь — под кошкой: та её догоняет и перекрывает.
-const SPRITES: [&str; 4] = ["bed", "bowl", "mouse", "pet"];
+/// а лежак и лоток — под всеми: кошка в них, а не за ними. Мышь — под кошкой: та её догоняет и перекрывает.
+const SPRITES: [&str; 5] = ["bed", "litter", "bowl", "mouse", "pet"];
 
 /// Кого прячет галочка «Прятать от записи экрана». Точку лазера и её эффекты laser.rs прячет всегда сам.
-const CAPTURED: [&str; 6] = ["bed", "bowl", "mouse", "pet", "menu", "bubble"];
+const CAPTURED: [&str; 7] = ["bed", "litter", "bowl", "mouse", "pet", "menu", "bubble"];
 
 /// Что питомец знает о человеке прямо сейчас.
 struct Senses {
@@ -184,7 +184,7 @@ fn build_sprite_window(app: &AppHandle, label: &str) -> tauri::Result<WebviewWin
     b.build()
 }
 
-/// Питомец, миска, лежак и мышь, у каждого свой поток прозрачности для кликов.
+/// Питомец, миска, лежак, лоток и мышь, у каждого свой поток прозрачности для кликов.
 fn open_sprites(app: &AppHandle) -> tauri::Result<()> {
     let masks = app.state::<Arc<Masks>>().inner().clone();
     // лужа мести — до спрайтов: так она ложится под кошку
@@ -367,7 +367,7 @@ fn tray_items() -> Vec<menu::Item> {
         disabled: false,
     };
     let mut items = Vec::new();
-    // проверить облачко, голод, мышь, клубок, новость и месть, не дожидаясь сроков; в релиз не попадает
+    // проверить облачко, голод, мышь, клубок, новость, месть, лоток и муху, не дожидаясь сроков; в релиз не попадает
     if cfg!(debug_assertions) {
         items.extend([
             entry("dev-say", "Say something (dev)", None),
@@ -378,6 +378,9 @@ fn tray_items() -> Vec<menu::Item> {
             entry("dev-news", "News (dev)", None),
             // обида без шанса и перезарядки; в «не мешать» и на созвоне всё равно нет
             entry("dev-revenge", "Revenge (dev)", None),
+            // лоток выключен — включит
+            entry("dev-litter", "Litter (dev)", None),
+            entry("dev-fly", "Fly (dev)", None),
             menu::Item::Separator { separator: true },
         ]);
     }
@@ -421,7 +424,7 @@ pub(crate) fn tray_pick(app: &AppHandle, id: &str) {
                 eprintln!("update: {err}");
             }
         }
-        "call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn" | "dev-news" | "dev-revenge" => {
+        "call" | "adopt" | "dev-say" | "dev-hungry" | "dev-hunter" | "dev-yarn" | "dev-news" | "dev-revenge" | "dev-litter" | "dev-fly" => {
             if let Err(err) = app.emit_to("pet", id, ()) {
                 eprintln!("{id}: {err}");
             }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BOWL_LEAN } from './roam';
-import { ANIMS, bedFrame, bedMask, BOWL_AT, BOWL_X, bowlFrame, bowlLeft, fatOn, FATS, flip, hitMask, onBowl, PALETTE, PUDDLE_FRAMES, PUDDLE_H, PUDDLE_W, SCRUFF_AT, SIZE } from './sprite';
+import { ANIMS, bedFrame, bedMask, BOWL_AT, BOWL_X, bowlFrame, bowlLeft, fatOn, FATS, flip, hitMask, LITTER_CLUMPS, LITTER_WEAR, litterFrame, litterMask, onBowl, PALETTE, PUDDLE_FRAMES, PUDDLE_H, PUDDLE_W, SCRUFF_AT, SIZE } from './sprite';
 
 const all = FATS.flatMap((fat) =>
   Object.entries(ANIMS[fat]).flatMap(([name, a]) => a.frames.map((f, i) => [`${name}[${i}] жир ${fat}`, f] as const)),
@@ -71,6 +71,52 @@ describe('лежак', () => {
     expect(area(bed)).toBe(0);
     for (let y = 0; y < SIZE; y++) expect(bedMask(bed)[y] !== 0).toBe(/[Rrq]/.test(bed[y]));
     expect(flip(bed)).toEqual(bed);
+  });
+});
+
+describe('лоток', () => {
+  const front = (f: string[]) => f.slice(SIZE - 5);
+
+  it('передний бортик в кадре кошки ложится ровно на бортик окна лотка и пропускает клик', () => {
+    const box = litterFrame();
+    for (const f of FATS.flatMap((fat) => [...ANIMS[fat].potty.frames, ...ANIMS[fat].dig.frames])) {
+      expect(front(f).map((r) => r.slice(2, 30))).toEqual(front(box).map((r) => r.slice(2, 30)));
+      const mask = hitMask(f);
+      for (let y = SIZE - 5; y < SIZE; y++) expect(mask[y] & 0x3ffffffc).toBe(0);
+    }
+  });
+
+  it('закапывает в лотке: наполнитель не вылетает за бортик', () => {
+    for (const f of FATS.flatMap((fat) => ANIMS[fat].dig.frames))
+      f.forEach((row, y) => [...row].forEach((c, x) => {
+        if (c === 'v' || c === 'V') expect(x > 2 && x < 29 && y < SIZE - 5).toBe(true);
+      }));
+  });
+
+  it('бортик симметричен — кошке, смотрящей влево, flip его не сдвигает', () => {
+    const box = litterFrame();
+    expect(front(flip(box))).toEqual(front(box));
+  });
+
+  it('окно лотка кликабельно по всему лотку', () => {
+    const box = litterFrame();
+    expect(area(box)).toBe(0);
+    for (let y = 0; y < SIZE; y++) expect(litterMask(box)[y] !== 0).toBe(/[Ttiv]/i.test(box[y]));
+  });
+
+  it('комочки и старый наполнитель — внутри лотка, ничего не торчит над бортиком', () => {
+    const clean = litterFrame();
+    const top = clean.findIndex((r) => r.includes('T'));
+    const count = (f: string[], c: string) => f.join('').split(c).length - 1;
+    for (let n = 0; n <= LITTER_CLUMPS + 2; n++)
+      for (let w = 0; w <= LITTER_WEAR; w++) {
+        const box = litterFrame(n, w);
+        expect(box.slice(0, top + 1)).toEqual(clean.slice(0, top + 1));
+        expect(front(box)).toEqual(front(clean));
+        expect(count(box, 'j')).toBe(6 * Math.min(n, LITTER_CLUMPS));
+      }
+    expect(count(litterFrame(0, 1), 'V')).toBeGreaterThan(count(clean, 'V'));
+    expect(count(litterFrame(0, 2), 'V')).toBeGreaterThan(count(litterFrame(0, 1), 'V'));
   });
 });
 

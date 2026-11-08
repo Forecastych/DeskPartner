@@ -107,6 +107,8 @@ export interface Settings {
   feeder: boolean;
   /** Лежак на полу: кошка чаще спит в нём, чем на рамках окон. */
   bed: boolean;
+  /** Лоток на полу: кошка сама в него ходит; ПКМ по нему — убрать или поменять. */
+  litter: boolean;
   /** Не попадать в скриншоты и запись экрана (WDA_EXCLUDEFROMCAPTURE). */
   hideFromCapture: boolean;
   /** «Охотник»: кошка гоняется за курсором, как за лазером, только без Ctrl. */
@@ -137,6 +139,7 @@ export function defaults(): Settings {
     name: '',
     feeder: false,
     bed: false,
+    litter: false,
     hideFromCapture: true,
     hunter: false,
     hunterArea: 'taskbar',
@@ -178,6 +181,7 @@ export function parse(raw: string | null): Settings {
     name: cleanName(s.name),
     feeder: bool(s.feeder, d.feeder),
     bed: bool(s.bed, d.bed),
+    litter: bool(s.litter, d.litter),
     hideFromCapture: bool(s.hideFromCapture, d.hideFromCapture),
     hunter: bool(s.hunter, d.hunter),
     hunterArea: oneOf(HUNTER_AREAS, s.hunterArea, d.hunterArea),

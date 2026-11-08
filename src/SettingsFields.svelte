@@ -181,6 +181,17 @@
       {t('Лежак', 'Bed')}
     </Check>
 
+    <Check
+      bind:checked={settings.litter}
+      hint={t(
+        'Лоток на полу — кошка иногда наведывается в него. ПКМ по лотку — убрать или поменять, а таскать его можно мышью.',
+        'A litter box on the floor: the cat visits it now and then. Right-click it to scoop or change it; drag it with the mouse.',
+      )}
+      {disabled}
+    >
+      {t('Лоток', 'Litter box')}
+    </Check>
+
     <Check bind:checked={settings.hideFromCapture} hint={t('Питомца не видно на скриншотах и стримах.', "Your pet won't show up in screenshots or streams.")} {disabled}>
       {t('Прятать от записи экрана', 'Hide from screen capture')}
     </Check>

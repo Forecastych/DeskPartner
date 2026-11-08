@@ -42,6 +42,12 @@ export const PALETTE: Record<string, string> = {
   o: '#f08c2a', // тыква
   O: '#b9561a', // тыква: дольки
   g: '#5c8a3a', // хвостик тыквы
+  T: '#2c4a52', // контур лотка
+  t: '#4f9a92', // лоток
+  i: '#7cc4ba', // ободок лотка
+  v: '#e6d3a3', // наполнитель
+  V: '#b9a172', // наполнитель потемнее, старый
+  j: '#8c7448', // комочки в наполнителе
 };
 
 /** Миска и корм в ней: клик сюда кормит, а не гладит. */
@@ -50,8 +56,11 @@ const BOWL_KEYS = new Set(['B', 'b', 'c', 'C']);
 /** Украшения не часть зверя: клик по сердечку, «з-з-з» или звёздочкам проходит насквозь. */
 const DECOR = new Set(['h', 'z', 's']);
 
-/** Перед лежака в кадре спящей кошки: клик по нему уходит окну лежака под ней — за него лежак и таскают. */
-const THROUGH = new Set([...DECOR, 'R', 'r', 'q']);
+/**
+ * Перед лежака в кадре спящей кошки: клик по нему уходит окну лежака под ней — за него лежак и таскают.
+ * Так же с бортиком лотка и наполнителем, который она разбрасывает.
+ */
+const THROUGH = new Set([...DECOR, 'R', 'r', 'q', 'T', 't', 'i', 'v', 'V']);
 
 // Голова анфас, 12×10: кошка идёт боком, но смотрит на человека.
 const HEAD_TOP: Part = [
@@ -227,6 +236,25 @@ const BED: Part = [
 /** Передний бортик закрывает кошку в лежаке снизу; хвост с подушки ложится на левый бортик. */
 const BED_FRONT: Part = BED.slice(4);
 
+// Лоток 28×10: ящик с ободком и глубокими бортиками, наполнитель вровень с задним бортиком —
+// всё закопано, ничего не торчит. Передний бортик с ободком — с ряда 3, он же `LITTER_FRONT`.
+const LITTER: Part = [
+  '.TTTTTTTTTTTTTTTTTTTTTTTTTT.',
+  '.TvvvvvvvvvvvvvvvvvvvvvvvvT.',
+  '.TvVvvvvvvvVvvvvvvvvVvvvvvT.',
+  'TTTTTTTTTTTTTTTTTTTTTTTTTTTT',
+  'TiiiiiiiiiiiiiiiiiiiiiiiiiiT',
+  'TTTTTTTTTTTTTTTTTTTTTTTTTTTT',
+  '.TttttttttttttttttttttttttT.',
+  '.TttttttttttttttttttttttttT.',
+  '..TttttttttttttttttttttttT..',
+  '..TTTTTTTTTTTTTTTTTTTTTTTT..',
+];
+const LITTER_FRONT: Part = LITTER.slice(3);
+// Наполнитель из-под лапы, когда закапывает: подлетает под мордой, над задним бортиком, и падает обратно в лоток.
+const SPRAY_A: Part = ['v.V', '.v.'];
+const SPRAY_B: Part = ['.V.', 'v.v'];
+
 const HEART: Part = ['.hh.hh.', 'hhhhhhh', 'hhhhhhh', '.hhhhh.', '..hhh..', '...h...'];
 const Z_SMALL: Part = ['zzzz', '..z.', '.z..', 'zzzz'];
 
@@ -361,6 +389,12 @@ const behindEdge = (z: Part, x: number, y: number): Frame => compose([z, x, y]);
 // Светлая подушечка сверху, ниже предплечье до груди (y 23), иначе лапа висит в воздухе.
 const raisedPaw = (y: number): Part => ['.kk.', 'kllk', 'kllk', ...Array<string>(23 - y - 2).fill('kffk')];
 const TONGUE: Part = ['pp'];
+
+// Муха (fly.ts): крылышки и тельце. Кружит над головой, потом оказывается у самой морды.
+const FLY: Part = ['w.w', '.k.'];
+const FLY_ORBIT: [number, number][] = [[4, 7], [9, 2], [16, 1], [22, 3], [25, 8], [14, 9]];
+// Довольная ухмылка: уголки рта приподняты.
+const MOUTH_SMUG: Part = ['klfffppffflk', '.klkllllklk.', '..kkkkkkkk..'];
 
 // Облизывается после погони: язык ходит по губам от одного уголка рта к другому.
 const LICK_LEFT: [Part, number, number][] = [[['p'], 13, 20], [['p'], 14, 21]];
@@ -501,9 +535,26 @@ function crouching(fat: Fat, wiggle: boolean): Frame {
  * Месть: присела, как в засаде, только хвост торчком и неподвижен — поза сидя, хвост в ней
  * не дёргается. Уши прижаты; кадры отличаются глазами: зло щурится, потом жмурится от усердия.
  */
-function squatting(fat: Fat, eyes: Part): Frame {
+function squatting(fat: Fat, eyes: Part, top = HEAD_FLAT): Frame {
   const legs = [...BACK, ...FRONT].map((x): [Part, number, number] => [leg(4 - fat), x, 28 + fat]);
-  return compose([TAIL_UP, 0, 14], [sideBody(fat), 4, 21], ...legs, [head(eyes, HEAD_BOTTOM, HEAD_FLAT), 17, 15]);
+  return compose([TAIL_UP, 0, 14], [sideBody(fat), 4, 21], ...legs, [head(eyes, HEAD_BOTTOM, top), 17, 15]);
+}
+
+/**
+ * Закапывает в лотке: стоит, голова неподвижна — не «копает мордой», — а передняя лапа гребёт над
+ * бортиком. Остальные лапы за бортиком не видны, поэтому гребущая поднята:
+ * `paw` — деталь и её x, `up` — на сколько рядов выше прочих лап она начинается.
+ */
+function digging(fat: Fat, paw: Part, x: number, up: number, spray: [Part, number, number][] = []): Frame {
+  const legs = [...BACK, FRONT[0]].map((lx): [Part, number, number] => [leg(6 - fat), lx, 26 + fat]);
+  return compose(
+    [TAIL_UP, 0, 12],
+    [sideBody(fat), 4, 19],
+    ...legs,
+    [head(EYES_OPEN), ...HEAD_AT],
+    [paw, x, 26 + fat - up],
+    ...spray.map(([part, sx, sy]): [Part, number, number] => [part, sx, sy + fat]),
+  );
 }
 
 const STAR: Part = ['.s.', 'sss', '.s.'];
@@ -577,6 +628,15 @@ function carried(fat: Fat, eyes: Part, sway: boolean): Frame {
 
 /** Спит в лежаке: калачик на пиксель ниже — в подушке, — снизу закрыт передним бортиком. */
 const inBed = (f: Frame): Frame => compose([['.'.repeat(SIZE), ...f.slice(0, SIZE - 1)], 0, 0], [BED_FRONT, 1, SIZE - BED_FRONT.length]);
+
+/** Кошка в лотке стоит на наполнителе — выше пола на столько рядов. */
+const LITTER_LIFT = 2;
+
+/**
+ * В лотке: лапы и низ туловища закрыты передним бортиком. Жирок прибавляется к туловищу снизу и ушёл бы
+ * за бортик, поэтому толстая поднята ещё на `fat` рядов — сидит в лотке выше.
+ */
+const inLitter = (fat: Fat) => (f: Frame): Frame => compose([f, 0, -LITTER_LIFT - fat], [LITTER_FRONT, 2, SIZE - LITTER_FRONT.length]);
 
 export interface Anim {
   frames: Frame[];
@@ -762,6 +822,21 @@ function build(fat: Fat) {
         sitting(fat, EYES_SHUT, SIT_TAIL),
       ],
     },
+    // лоток (litter.ts): присела, задумчиво смотрит вдаль, потом закапывает — хвост в позе неподвижен
+    potty: {
+      ms: 700,
+      frames: [EYES_OPEN, EYES_OPEN, EYES_SLEEPY, EYES_OPEN, EYES_SHUT].map((eyes) => inLitter(fat)(squatting(fat, eyes, HEAD_TOP))),
+    },
+    // гребок: лапа тянется вперёд, загребает вниз, тащит к себе — наполнитель подлетает — и снова вперёд
+    dig: {
+      ms: 200,
+      frames: [
+        digging(fat, slantLeg(5, 1)[0], FRONT[1] + 1, 3),
+        digging(fat, leg(5), FRONT[1] + 4, 2),
+        digging(fat, slantLeg(5, -1)[0], FRONT[1] - 1, 2, [[SPRAY_A, 23, 23]]),
+        digging(fat, leg(4), FRONT[1], 3, [[SPRAY_B, 23, 23]]),
+      ].map(inLitter(fat)),
+    },
     strut: {
       ms: 150,
       frames: [
@@ -809,6 +884,41 @@ function build(fat: Fat) {
         sitting(fat, EYES_SHUT, SIT_TAIL, [[CAKE, 0, 24], [PAW_SIDE, 7, 28]]),
         sitting(fat, EYES_HAPPY, SIT_TAIL, [[CAKE, 0, 24]]),
       ],
+    },
+    // «муху съела» (fly.ts): следит за мухой, щёлкает пастью, жуёт, объявляет и сидит, прищурившись
+    flyWatch: {
+      ms: 250,
+      frames: FLY_ORBIT.map(([x, y]) => sitting(fat, EYES_OPEN, SIT_TAIL, [[FLY, x, y]])),
+    },
+    snap: {
+      ms: 200,
+      frames: [
+        sitting(fat, EYES_OPEN, SIT_TAIL, [[HEAD_MEOW, 10, 19], [FLY, 14, 17]]),
+        sitting(fat, EYES_SHUT, SIT_TAIL, [[HEAD_MEOW, 10, 19], [['k'], 15, 19]]),
+        sitting(fat, EYES_SHUT, SIT_TAIL),
+      ],
+    },
+    chew: {
+      ms: 200,
+      frames: [
+        sitting(fat, EYES_SHUT, SIT_TAIL, [[HEAD_MEOW, 10, 19]]),
+        sitting(fat, EYES_SHUT, SIT_TAIL),
+        sitting(fat, EYES_SHUT, SIT_TAIL, [[HEAD_MEOW, 10, 19]]),
+        sitting(fat, EYES_HAPPY, SIT_TAIL),
+      ],
+    },
+    announce: {
+      ms: 300,
+      frames: [
+        sitting(fat, EYES_OPEN, SIT_TAIL, [[HEAD_MEOW, 10, 19]]),
+        sitting(fat, EYES_OPEN, SIT_TAIL),
+        sitting(fat, EYES_OPEN, SIT_TAIL, [[HEAD_MEOW, 10, 19]]),
+        sitting(fat, EYES_OPEN, SIT_TAIL),
+      ],
+    },
+    squint: {
+      ms: 700,
+      frames: [EYES_SLEEPY, EYES_SLEEPY, EYES_SLEEPY, EYES_SHUT].map((eyes) => sitting(fat, eyes, SIT_TAIL, [[MOUTH_SMUG, 10, 19]])),
     },
     zzz: {
       ms: 1100,
@@ -1001,3 +1111,29 @@ export const bedFrame = (): Frame => compose([BED, 1, SIZE - BED.length]);
 
 /** Маска окна лежака: в нём сам лежак и кликабелен. */
 export const bedMask = (frame: Frame): number[] => hitMask(frame, DECOR);
+
+/** Где в наполнителе ложатся комочки (x в лотке): по одному за поход. */
+const CLUMPS = [7, 19, 13];
+/** Больше комочков в лоток не помещается — дальше копятся невидимо, до «Убрать». */
+export const LITTER_CLUMPS = CLUMPS.length;
+/** Наполнитель старится ступенями: на каждой темнеет больше крупинок, «Поменять» — снова свежий. */
+export const LITTER_WEAR = 2;
+
+/** Кадр окна лотка: `clumps` комочков в наполнителе, `wear` — насколько он старый (0..LITTER_WEAR). */
+export function litterFrame(clumps = 0, wear = 0): Frame {
+  const rows = LITTER.map((r) => [...r]);
+  for (const y of [1, 2])
+    rows[y].forEach((c, x) => {
+      // крупинки темнеют вразнобой, но всегда одни и те же: кадр не мерцает от перерисовки
+      if (c === 'v' && (x * x * 7 + x * 3 + y * 11) % 10 < Math.min(wear, LITTER_WEAR) * 3) rows[y][x] = 'V';
+    });
+  // комочек — бугорок вровень с бортиком: два пикселя сверху, четыре под ними
+  for (const x of CLUMPS.slice(0, clumps)) {
+    rows[1][x] = rows[1][x + 1] = 'j';
+    for (let dx = -1; dx <= 2; dx++) rows[2][x + dx] = 'j';
+  }
+  return compose([rows.map((r) => r.join('')), 2, SIZE - LITTER.length]);
+}
+
+/** Маска окна лотка: весь лоток кликабелен — за него и таскают. */
+export const litterMask = (frame: Frame): number[] => hitMask(frame, DECOR);

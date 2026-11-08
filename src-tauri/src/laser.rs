@@ -4,8 +4,9 @@
 //! любое другое нажатие при зажатом Ctrl (клавиша, кнопка мыши, колесо) гасит попытку до
 //! отпускания — так Ctrl+C, Ctrl+клик и Ctrl+колесо указку не зовут. Alt не годится: он уже
 //! значит «клик сквозь питомца» (hit.rs). Второй путь — `set_laser(true)` из меню: светит,
-//! пока не нажмут Esc, не позовут `set_laser(false)` или не начнётся «не мешать» (win::quiet):
-//! в играх Ctrl — это присесть, поэтому в полноэкранном указки нет вовсе.
+//! пока не нажмут Esc, не позовут `set_laser(false)` или не начнётся «не мешать» (win::quiet).
+//! На весь экран без рамки (видео, F11, игра в окне) светит только указка из меню: в играх Ctrl —
+//! это присесть, поэтому зажатием там не зовём. См. [`blocked`].
 //!
 //! Окну питомца уходят "laser" {x, y} — горячая точка курсора в физических пикселях рабочего
 //! стола, не чаще 60 раз в секунду и только когда курсор сдвинулся, первое сразу при включении, —
@@ -20,6 +21,7 @@
 //! уходит только окну "push" и выбрасывается сразу после эффекта (а невостребованный — через [`SHOT_TTL`]).
 
 use crate::hit::SPRITE;
+use crate::win::Quiet;
 use crate::world::Rect;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -65,6 +67,13 @@ impl Trigger {
     pub fn disarm(&mut self) {
         self.disarmed = self.since.is_some();
     }
+}
+
+/// Не светить сейчас. `sticky` — указку включили из меню. На весь экран без рамки её позвали
+/// нарочно — светит; Ctrl там гасим (игра). Эксклюзивный Direct3D (поверх не рисуется),
+/// презентация, заблокированный экран и «босс рядом» гасят всё.
+pub fn blocked(quiet: Quiet, bossed: bool, sticky: bool) -> bool {
+    bossed || !(quiet == Quiet::No || (quiet == Quiet::Fullscreen && sticky))
 }
 
 /// Занос кошки.
@@ -258,7 +267,7 @@ pub fn push_done(id: u32) {
 #[cfg(windows)]
 mod sys {
     use super::*;
-    use crate::win::{self, Quiet};
+    use crate::win;
     use std::ffi::c_void;
     use std::mem::{size_of, zeroed};
     use std::ptr::null_mut;
@@ -570,7 +579,8 @@ mod sys {
         let Some(h) = HWNDS.get() else { return };
         let mut trigger = Trigger::default();
         let mut on = false;
-        let mut quiet = false;
+        let mut quiet = Quiet::No;
+        let mut bossed = false;
         let mut was_sticky = false;
         // пока указка включена из меню, Esc гасит её, а не что-то в активной программе
         let mut trap: Option<crate::esc::Trap> = None;
@@ -599,7 +609,8 @@ mod sys {
             let slow_tick = at.duration_since(slow) >= SLOW;
             if slow_tick {
                 slow = at;
-                quiet = win::quiet() != Quiet::No || win::bossed();
+                quiet = win::quiet();
+                bossed = win::bossed();
             }
 
             let ctrl = down(VK_CONTROL);
@@ -623,12 +634,18 @@ mod sys {
             let mut want = held || STICKY.load(Ordering::Relaxed);
             // зажечься можно и между медленными тиками — тогда «не мешать» спросим прямо сейчас
             if want && !on && !slow_tick {
-                quiet = win::quiet() != Quiet::No || win::bossed();
+                quiet = win::quiet();
+                bossed = win::bossed();
             }
-            if quiet {
+            let sticky = STICKY.load(Ordering::Relaxed);
+            if blocked(quiet, bossed, sticky) {
                 STICKY.store(false, Ordering::Relaxed);
                 trigger.disarm();
                 want = false;
+            } else if quiet != Quiet::No {
+                // на весь экран светит только указка из меню, Ctrl там — присесть
+                trigger.disarm();
+                want = sticky;
             }
             was_sticky = STICKY.load(Ordering::Relaxed);
             if !was_sticky {
@@ -669,6 +686,18 @@ mod tests {
 
     fn ms(t0: Instant, n: u64) -> Instant {
         t0 + Duration::from_millis(n)
+    }
+
+    #[test]
+    fn fullscreen_keeps_menu_laser_but_not_ctrl() {
+        assert!(!blocked(Quiet::No, false, false));
+        assert!(!blocked(Quiet::Fullscreen, false, true));
+        assert!(blocked(Quiet::Fullscreen, false, false));
+        for q in [Quiet::ExclusiveFullscreen, Quiet::Presentation, Quiet::Away] {
+            assert!(blocked(q, false, true));
+        }
+        assert!(blocked(Quiet::No, true, true));
+        assert!(blocked(Quiet::Fullscreen, true, true));
     }
 
     /// Какие пиксели снимка прозрачны, построчно: '#' — вырезан, '.' — остался.

@@ -817,18 +817,20 @@ function putOn(world: World, s: Surface, x: number, right: number): Thing | null
 }
 
 /**
- * Вещь в мире, который мог поменяться. Без места — `home` пола основного монитора.
+ * Вещь в мире, который мог поменяться. Без места — `home` пола основного монитора, у угла `home`
+ * отодвинута на `shift` сторон спрайта (чтобы вещи у одного угла не стояли друг на друге).
  * На рамке окна — едет за окном; рамки под ней больше нет (окно закрыли, свернули, загородили) — падает.
  * Падает и брошенная: на ближайшую кромку окна под собой, где поместится, иначе на пол монитора.
  * На полосы заголовков вещи не ставятся — они только поспать.
  */
-function settle(world: World, at: Place | null, right: number, home: 'lo' | 'hi'): Thing | null {
+function settle(world: World, at: Place | null, right: number, home: 'lo' | 'hi', shift = 0): Thing | null {
   const all = surfaces(world).filter((c) => !c.strip);
   if (!at) {
     const i = Math.max(world.monitors.findIndex((m) => m.primary), 0);
     const f = world.monitors[i] && floorOf(all, i);
     if (!f) return null;
-    return putOn(world, f, home === 'lo' ? -Infinity : Infinity, right);
+    const k = side(world.monitors[i]);
+    return putOn(world, f, home === 'lo' ? f.left + k * (0.5 + shift) + EDGE_GAP : f.right - k * (right + shift) - EDGE_GAP, right);
   }
   let { x, y } = at;
   if (at.hwnd != null) {
@@ -875,6 +877,28 @@ export const atBowl = (pet: Pet, world: World, at: Place | null = null): boolean
 
 /** Стоит у лежака (в нём). */
 export const atBed = (pet: Pet, world: World, at: Place | null = null): boolean => standsAt(pet, bedAt(world, at));
+
+/** Лоток по умолчанию правее лежака на столько сторон спрайта: оба у левого угла, но не друг на друге. */
+export const LITTER_SHIFT = 1.5;
+
+/** Где стоит лоток: как лежак, по умолчанию у левого угла основного монитора, чуть правее. */
+export const litterAt = (world: World, at: Place | null = null): Thing | null => settle(world, at, 0.5, 'lo', LITTER_SHIFT);
+
+/** Стоит в лотке. */
+export const atLitter = (pet: Pet, world: World, at: Place | null = null): boolean => standsAt(pet, litterAt(world, at));
+
+/** Отойти на `sides` сторон спрайта: вперёд, куда смотрит, а если там тесно — назад; по той же поверхности. */
+export function stepAside(pet: Pet, world: World, sides: number): Pet {
+  const s = surfaces(world).find((x) => x.id === pet.on);
+  const m = monitorOf(world, pet);
+  if (!s || !m) return pet;
+  const half = side(m) / 2 + EDGE_GAP;
+  const go = (dir: number) => fit(pet.x + dir * sides * side(m), s.left + half, s.right - half);
+  let x = go(pet.facing);
+  if (Math.abs(x - pet.x) < side(m)) x = go(-pet.facing);
+  if (Math.abs(x - pet.x) < 1) return pet;
+  return goTo(pet, world, { surface: s.id, x });
+}
 
 /**
  * Кошку отпустили, пронеся над экраном: лапы в (x, y). Точку зажимает в work ближайшего монитора,

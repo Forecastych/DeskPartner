@@ -101,26 +101,6 @@ pub fn watching(s: Option<&Session>, fg: &str, level: f32, fullscreen: bool) -> 
     listed(PLAYERS, fg) && level > SOUND
 }
 
-/// Браузер засчитывается только на весь экран, а Windows знает «весь экран» лишь про активное окно:
-/// alt-tab с фильма — и через полминуты сеанс бы кончился. Поэтому фильм, засчитанный на весь экран,
-/// держится, пока плитка играет его же (источник и название). Пауза не сбрасывает, другой ролик — сбрасывает.
-#[derive(Debug, Default)]
-pub struct Held(Option<(String, String)>);
-
-impl Held {
-    pub fn watching(&mut self, s: Option<&Session>, fg: &str, level: f32, fullscreen: bool) -> bool {
-        let now = s.filter(|s| s.playing).map(|s| (s.source.clone(), s.title.clone()));
-        if let Some(film) = &now {
-            if fullscreen && listed(BROWSERS, &film.0) {
-                self.0 = now.clone();
-            } else if self.0.as_ref() != Some(film) {
-                self.0 = None;
-            }
-        }
-        watching(s, fg, level, fullscreen) || (now.is_some() && self.0 == now)
-    }
-}
-
 /// Из сеансов плитки — играющий, видео вперёд; никто не играет — None.
 pub fn pick(sessions: Vec<Session>) -> Option<Session> {
     let mut playing: Vec<Session> = sessions.into_iter().filter(|s| s.playing).collect();
@@ -207,7 +187,6 @@ mod sys {
                 let mut session: Option<Session> = None;
                 let mut fg = String::new();
                 let mut full = false;
-                let mut held = Held::default();
                 loop {
                     std::thread::sleep(SAMPLE);
                     let at = Instant::now();
@@ -239,6 +218,9 @@ mod sys {
                             None => None,
                         };
                         fg = crate::win::foreground_path().map(|p| source_name(&p)).unwrap_or_default();
+                        // «весь экран» Windows знает лишь про активное окно, поэтому ещё и окна, накрывшие
+                        // свой монитор в фоне: alt-tab с фильма — кино идёт, вышли из полноэкранного
+                        // или свернули (свёрнутые sys::windows не отдаёт) — кончилось
                         full = crate::win::quiet() == crate::win::Quiet::Fullscreen || {
                             let exes: Vec<String> = crate::world::covering()
                                 .into_iter()
@@ -251,7 +233,7 @@ mod sys {
                     n = n.wrapping_add(1);
 
                     let now = Media {
-                        watching: held.watching(session.as_ref(), &fg, loud.level(), full),
+                        watching: watching(session.as_ref(), &fg, loud.level(), full),
                         title: session.as_ref().map(|s| s.title.clone()).unwrap_or_default(),
                         loud: loud.loud(at),
                     };
@@ -330,21 +312,16 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_film_survives_alt_tab_and_pause() {
-        let mut h = Held::default();
+    fn browser_film_lasts_only_while_on_full_screen() {
         let film = playing("chrome", false);
         // в окне — ещё не кино
-        assert!(!h.watching(Some(&film), "chrome", 0.5, false));
-        assert!(h.watching(Some(&film), "chrome", 0.5, true));
-        // alt-tab: Windows больше не говорит «весь экран», а фильм тот же
-        assert!(h.watching(Some(&film), "code", 0.5, false));
-        // пауза не играет, но и не забывает
-        assert!(!h.watching(None, "code", 0.0, false));
-        assert!(h.watching(Some(&film), "code", 0.5, false));
-        // другой ролик в окне — уже музыка, и прежний фильм забыт
-        let song = Session { title: "Плейлист".into(), ..playing("chrome", false) };
-        assert!(!h.watching(Some(&song), "chrome", 0.5, false));
-        assert!(!h.watching(Some(&film), "chrome", 0.5, false));
+        assert!(!watching(Some(&film), "chrome", 0.5, false));
+        // на весь экран — кино, и в фокусе браузер или нет, неважно (окно накрывает монитор)
+        assert!(watching(Some(&film), "chrome", 0.5, true));
+        assert!(watching(Some(&film), "code", 0.5, true));
+        // вышли из полноэкранного или свернули — тот же ролик уже не кино
+        assert!(!watching(Some(&film), "chrome", 0.5, false));
+        assert!(!watching(Some(&film), "code", 0.5, false));
     }
 
     #[test]

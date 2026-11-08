@@ -17,7 +17,7 @@
 // `tick` вместо `roam.step` (как у клубка); лужу рисует окно "puddle" по `view`.
 
 import { PUDDLE_H, PUDDLE_W, SIZE } from './sprite';
-import { EDGE_GAP, WALK, goTo, inRect, monitorOf, side, step, surfaces, type Goal, type Monitor, type Pet, type Rect, type RoamEvent, type World } from './roam';
+import { EDGE_GAP, WALK, goTo, inRect, monitorOf, side, step, stepAside, surfaces, type Goal, type Monitor, type Pet, type Rect, type RoamEvent, type World } from './roam';
 
 const MIN = 60_000;
 
@@ -374,19 +374,6 @@ export function start(world: World, pet: Pet, app: string | null | undefined, no
 /** Кошкой правит месть. */
 export const owns = (m: Mission | null): boolean => m !== null && m.phase !== 'done';
 
-/** Отойти от лужи: вперёд, куда смотрит, а если там тесно — назад; по той же поверхности. */
-function away(pet: Pet, world: World): Pet {
-  const s = surfaces(world).find((x) => x.id === pet.on);
-  const m = monitorOf(world, pet);
-  if (!s || !m) return pet;
-  const half = side(m) / 2 + EDGE_GAP;
-  const go = (dir: number) => fit(pet.x + dir * LEAVE_SIDES * side(m), s.left + half, s.right - half);
-  let x = go(pet.facing);
-  if (Math.abs(x - pet.x) < side(m)) x = go(-pet.facing);
-  if (Math.abs(x - pet.x) < 1) return pet;
-  return goTo(pet, world, { surface: s.id, x });
-}
-
 /**
  * Один кадр мести. Возвращает новую лужу в тот кадр, когда кошка присела (иначе null): лужа
  * живёт дольше мести, её хранит приложение.
@@ -410,7 +397,7 @@ export function tick(m: Mission, world: World, pet: Pet, now: number, dt: number
       if (now >= m.t) return [{ ...m, phase: 'smug', t: now + SMUG_MS }, pet, e, null];
       break;
     case 'smug':
-      if (now >= m.t) return [{ ...m, phase: 'leave', t: now + GIVE_UP }, away(pet, world), e, null];
+      if (now >= m.t) return [{ ...m, phase: 'leave', t: now + GIVE_UP }, stepAside(pet, world, LEAVE_SIDES), e, null];
       break;
     case 'leave':
       if (e === 'arrived' || stopped || now >= m.t) return [{ ...m, phase: 'done' }, pet, e, null];
