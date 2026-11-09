@@ -11,6 +11,7 @@ const gh = `https://github.com/${CONFIG.REPO}`;
 const LINKS = {
   repo: gh,
   download: `${gh}/releases/latest`,
+  itch: 'https://forecastych.itch.io/deskpartner',
   issues: `${gh}/issues/new/choose`,
   license: `${gh}/blob/main/LICENSE`,
 };
@@ -26,6 +27,7 @@ const RU = {
   intro: 'Гуляет по окнам, ест, спит и обижается, если её будить. Смотрит с вами кино, а на созвонах прячется. Гоняется за пиксельной мышью и играет с клубком. Растёт вместе с вами, а если попросите – расскажет о патчах ваших игр и новых сериях аниме.',
   download: 'Скачать',
   free: 'Windows 10 и 11 · бесплатно для некоммерческого использования',
+  itch: 'Ещё есть на <a data-link="itch">itch.io</a>',
   does: 'Что она делает',
   eat: 'Ест',
   eatText: 'Проголодается – ждёт у миски. Не покормите – уйдёт искать еду сама.',

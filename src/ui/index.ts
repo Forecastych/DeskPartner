@@ -9,7 +9,7 @@
 //      (snippet header), прокрутка (содержимое) и кнопки внизу (snippet footer). Нужна форма с
 //      Enter — передать onsubmit, корнем станет <form>.
 //   3. Внутри — Section (раздел с h2), Group (fieldset с подписью), Check, Radio, TextInput,
-//      Button, Hint. Своё оформление окна — в его <style> на токенах --ui-* из tokens.css,
+//      Slider, Button, Hint. Своё оформление окна — в его <style> на токенах --ui-* из tokens.css,
 //      без новых цветов и размеров «на глаз».
 //
 // Глобальных стилей здесь нет: CSS у всех окон один, а питомец должен остаться прозрачным.
@@ -25,5 +25,6 @@ export { default as Hint } from './Hint.svelte';
 export { default as Icon } from './Icon.svelte';
 export { default as Radio } from './Radio.svelte';
 export { default as Section } from './Section.svelte';
+export { default as Slider } from './Slider.svelte';
 export { default as TextInput } from './TextInput.svelte';
 export { ICONS, type IconName } from './pixels';

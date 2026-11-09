@@ -12,7 +12,8 @@
   // Окно вещи на полу — лежака или лотка; какой именно, говорит метка окна. События те же,
   // что у миски, с именем вещи: `bed`, `bed-drop`, `bed-grab`, `bed-hello` (и `litter-…`).
   // У лотка ещё ПКМ-меню: выбор уходит кошке событием `litter-scoop` или `litter-change`.
-  // Подарок (мышка на 100 дней) — тоже вещь: ПКМ «Принять» или «Убрать» — `gift-accept`, `gift-remove`.
+  // Подарок (мышка на 100 дней) — тоже вещь: ПКМ «Принять» или «Убрать» — `gift-accept`, `gift-remove`;
+  // у трофея — «Спрятать», `gift-hide`.
   const SPRITES: Record<string, [(s: ThingState) => Frame, (f: Frame) => number[]]> = {
     bed: [bedFrame, bedMask],
     litter: [(s) => litterFrame(s.clumps, s.wear), litterMask],
@@ -70,12 +71,17 @@
     invoke('open_menu', { owner: name, items }).catch(console.error);
   }
 
-  /** ПКМ по подарку: принять (пока ждёт) или убрать. Трофей убирают тем же пунктом. */
+  /**
+   * ПКМ по подарку: пока ждёт — принять или убрать (она обидится). Трофей не убирают навсегда,
+   * а прячут — без обиды; показать его снова можно в окне статистики, в «Достижениях».
+   */
   function giftMenu() {
-    const remove: MenuItem = state.kept
-      ? { id: 'remove', text: t('Убрать подарок', 'Remove the gift'), hint: t('трофея больше не будет', 'the trophy will be gone') }
-      : { id: 'remove', text: t('Убрать подарок', 'Remove the gift'), hint: t('она обидится', "she'll be hurt") };
-    const items: MenuItem[] = state.kept ? [remove] : [{ id: 'accept', text: t('Принять подарок', 'Accept the gift'), hint: t('пусть лежит трофеем', 'keep it as a trophy') }, remove];
+    const items: MenuItem[] = state.kept
+      ? [{ id: 'hide', text: t('Спрятать подарок', 'Hide gift'), hint: t('без обиды; вернуть — в статистике', 'no hard feelings; bring it back in Stats') }]
+      : [
+          { id: 'accept', text: t('Принять подарок', 'Accept the gift'), hint: t('пусть лежит трофеем', 'keep it as a trophy') },
+          { id: 'remove', text: t('Убрать подарок', 'Remove the gift'), hint: t('она обидится', "she'll be hurt") },
+        ];
     invoke('open_menu', { owner: name, items }).catch(console.error);
   }
 
@@ -106,7 +112,7 @@
     });
     // выбор в меню лотка или подарка Rust шлёт окну-владельцу, то есть сюда
     const unpick = me.listen<{ id: string }>('menu-pick', (e) => {
-      if (['scoop', 'change', 'accept', 'remove'].includes(e.payload.id)) emitTo('pet', `${name}-${e.payload.id}`).catch(console.error);
+      if (['scoop', 'change', 'accept', 'remove', 'hide'].includes(e.payload.id)) emitTo('pet', `${name}-${e.payload.id}`).catch(console.error);
     });
     // вещь выдернули из-под кошки (лежак — проснётся, лоток — передумает); слушаем своим окном: Rust шлёт сюда
     const ungrab = me.listen('drag-start', () => {

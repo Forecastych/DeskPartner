@@ -1,19 +1,38 @@
-// Помодоро-компаньон. Человек включает «Фокус 25 минут» из меню кошки или трея — кошка засыпает на
+// Помодоро-компаньон. Человек включает «Фокус N минут» из меню кошки или трея — кошка засыпает на
 // таймере рядом с песочными часами (hourglass.ts) и ничего не затевает: не болтает, не играет, не
 // мстит, побудками её не поднять. Время вышло — просыпается, потягивается и зовёт на перерыв.
-// Перерыв — пять минут без занудства; следующий фокус включает человек, по кругу сами не идут.
-// Фокус живёт только в памяти: перезапуск программы его сбрасывает.
+// Перерыв — пятая часть фокуса без занудства; следующий фокус включает человек, по кругу сами не идут.
+// Длину выбирают ползунком прямо в меню (от минуты до трёх часов), она запоминается в настройках
+// (focusMin); сам фокус живёт только в памяти: перезапуск программы его сбрасывает.
 
 import { t } from './i18n';
 import { MAX_STEP_MS } from './hunger';
+import type { MenuSlider } from './menu';
 import type { Sleep } from './sleep';
 
 const MIN = 60_000;
 
-/** Длина фокуса. */
-export const FOCUS_MS = 25 * MIN;
-/** Перерыв после фокуса — считается с облачка, когда человек его увидел. */
-export const BREAK_MS = 5 * MIN;
+/** Длина фокуса по умолчанию, минут: классический помодоро. */
+export const FOCUS_MIN = 25;
+/** Ползунок длины: от минуты (попробовать, как оно) до трёх часов (долгая глубокая работа). */
+export const FOCUS_MIN_LO = 1;
+export const FOCUS_MIN_HI = 180;
+
+/** Длина в минутах из чего угодно (настройки с диска, событие трея): целая и в пределах ползунка. */
+export function focusMinutes(v: unknown): number {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return FOCUS_MIN;
+  return Math.min(FOCUS_MIN_HI, Math.max(FOCUS_MIN_LO, Math.round(n)));
+}
+
+/**
+ * Перерыв после фокуса, мс — пятая часть, как 25 → 5 у классики. Не меньше минуты: после короткого
+ * фокуса перерыв не должен кончиться, едва облачко показалось; не больше получаса: после трёх часов
+ * отдых нужен, но час без дела — уже не перерыв. Считается с облачка, когда человек его увидел.
+ */
+export function breakMs(minutes: number): number {
+  return Math.min(30, Math.max(1, Math.round(focusMinutes(minutes) / 5))) * MIN;
+}
 /** Столько потягивается, проснувшись: два раза зевнуть. */
 export const STRETCH_MS = 5400;
 /**
@@ -33,34 +52,47 @@ export interface Pomodoro {
   until: number;
   /** Облачко «Перерыв!» показано. */
   offered: boolean;
+  /** Длина фокуса, минут: от неё считается перерыв, поэтому переходит из фазы в фазу. */
+  minutes: number;
 }
 
 /** Что случилось на шаге: фокус кончился, потянулась, перерыв прошёл. */
 export type PomodoroEvent = 'done' | 'stretched' | 'over';
 
-export function start(now: number): Pomodoro {
-  return { phase: 'focus', since: now, until: now + FOCUS_MS, offered: false };
+/** Начать фокус длиной `minutes` (поправляется в пределы ползунка). */
+export function start(now: number, minutes: number = FOCUS_MIN): Pomodoro {
+  const m = focusMinutes(minutes);
+  return { phase: 'focus', since: now, until: now + m * MIN, offered: false, minutes: m };
 }
 
 export const focusing = (p: Pomodoro | null): boolean => p?.phase === 'focus';
 
 /**
  * Один шаг по часам. Фокус → потягушки → перерыв → ничего (null). Перерыв длится OFFER_WAIT_MS,
- * пока облачко не показано, и BREAK_MS с момента показа. Вход не трогает.
+ * пока облачко не показано, и breakMs с момента показа. Вход не трогает.
  */
 export function step(p: Pomodoro | null, now: number): [Pomodoro | null, PomodoroEvent | null] {
   if (!p || now < p.until) return [p, null];
-  if (p.phase === 'focus') return [{ phase: 'stretch', since: now, until: now + STRETCH_MS, offered: false }, 'done'];
-  if (p.phase === 'stretch') return [{ phase: 'break', since: now, until: now + OFFER_WAIT_MS, offered: false }, 'stretched'];
+  const { minutes } = p;
+  if (p.phase === 'focus') return [{ phase: 'stretch', since: now, until: now + STRETCH_MS, offered: false, minutes }, 'done'];
+  if (p.phase === 'stretch') return [{ phase: 'break', since: now, until: now + OFFER_WAIT_MS, offered: false, minutes }, 'stretched'];
   return [null, 'over'];
 }
 
 /** Облачко пора показать: перерыв начался, а его ещё не видели. Можно ли мешать — решает App. */
 export const offerDue = (p: Pomodoro | null): boolean => p?.phase === 'break' && !p.offered;
 
-/** Облачко показали: с этой минуты пять минут перерыва. */
+/**
+ * Фокус кончился, облачко ещё не показано: кошка не засыпает. Иначе после короткого фокуса
+ * (не доспала RESTED_MS) или при замершем у экрана человеке (humanIdle) она уснёт на следующем
+ * же кадре, а «Перерыв!» ждёт бодрую — и перерыв тихо истечёт. Позвала — дальше как обычно:
+ * сонная может и уснуть.
+ */
+export const awaiting = (p: Pomodoro | null): boolean => p?.phase === 'stretch' || offerDue(p);
+
+/** Облачко показали: с этой минуты перерыв — пятая часть фокуса (breakMs). */
 export function offered(p: Pomodoro, now: number): Pomodoro {
-  return { ...p, offered: true, until: now + BREAK_MS };
+  return { ...p, offered: true, until: now + breakMs(p.minutes) };
 }
 
 /** Сколько песка пересыпалось, 0…1; вне фокуса — 0. */
@@ -98,7 +130,7 @@ export function leftLine(p: Pomodoro, now: number): string {
   return t(`Тс-с, фокус. Ещё ${m} мин`, `Shh, focus. ${m} min left`);
 }
 
-/** Облачко после фокуса. Голодная сначала просит есть — полчаса проспала, а миска сама не наполнится. */
+/** Облачко после фокуса. Голодная сначала просит есть — весь фокус проспала, а миска сама не наполнится. */
 export function offerLine(hungry: boolean): string {
   return hungry ? t('Перерыв! Покормишь — и поиграем?', 'Break time! Feed me, then play?') : t('Перерыв! Поиграем?', 'Break time! Shall we play?');
 }
@@ -106,15 +138,34 @@ export function offerLine(hungry: boolean): string {
 /** Кнопка в облачке «Перерыв!»: включает лазерную указку. */
 export const offerAct = (): string => t('Лазер', 'Laser');
 
-/** Пункт меню (кошки и трея): включить фокус или отменить идущий. */
-export function menuEntry(p: Pomodoro | null, now: number): { id: 'focus' | 'focus-cancel'; text: string; hint: string } {
+/**
+ * Текст пункта «Фокус N минут» шаблоном для окна меню (lib/menu.ts, fill): число подставляет само
+ * окно, пока тянут ползунок. Тот же шаблон у трея в Rust (lib.rs, tray_items).
+ */
+export const focusText = (): string => t('Фокус {n} {минута|минуты|минут}', 'Focus for {n} {minute|minutes}');
+
+/** Пункт «Фокус» с ползунком «Таймер» или «Отменить фокус» с остатком — что положить в меню. */
+export interface FocusEntry {
+  id: 'focus' | 'focus-cancel';
+  text: string;
+  hint: string;
+  slider?: MenuSlider;
+}
+
+/**
+ * Пункт меню (кошки и трея): включить фокус или отменить идущий. Пока фокуса нет — под пунктом
+ * ползунок «Таймер» с прошлой длиной `minutes`: повторить — один клик, другая длина — сдвинуть и
+ * кликнуть. Выбор приходит как «focus:40» (lib/menu.ts, picked).
+ */
+export function menuEntry(p: Pomodoro | null, now: number, minutes: number = FOCUS_MIN): FocusEntry {
   if (p?.phase === 'focus') {
     const m = minutesLeft(p, now);
     return { id: 'focus-cancel', text: t('Отменить фокус', 'Cancel focus'), hint: t(`ещё ${m} мин`, `${m} min left`) };
   }
+  const slider = { min: FOCUS_MIN_LO, max: FOCUS_MIN_HI, value: focusMinutes(minutes), label: t('Таймер', 'Timer') };
   if (p?.phase === 'break' && p.offered) {
     const m = minutesLeft(p, now);
-    return { id: 'focus', text: t('Фокус 25 минут', 'Focus for 25 minutes'), hint: t(`перерыв: ещё ${m} мин`, `break: ${m} min left`) };
+    return { id: 'focus', text: focusText(), hint: t(`перерыв: ещё ${m} мин`, `break: ${m} min left`), slider };
   }
-  return { id: 'focus', text: t('Фокус 25 минут', 'Focus for 25 minutes'), hint: t('кошка поспит на таймере', 'the cat naps on a timer') };
+  return { id: 'focus', text: focusText(), hint: t('кошка поспит на таймере', 'the cat naps on a timer'), slider };
 }

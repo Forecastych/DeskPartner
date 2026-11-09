@@ -26,7 +26,7 @@ mod world;
 
 use hit::{Masks, SPRITE};
 #[cfg(windows)]
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracker::{Day, Now, Pace, Totals, Tracker};
@@ -254,16 +254,26 @@ async fn finish_setup(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Поднять обычное окно над остальными и отдать ему фокус. Из трея и меню кошки Windows фокус
+/// не отдаёт: процесс не на переднем плане (питомец и меню фокус не берут нарочно), и
+/// SetForegroundWindow молча отказывает — окно открывалось под чужими. Миг «поверх всех»
+/// поднимает его в z-порядке и без фокуса, а set_focus уже пробует активировать.
+fn raise(w: &WebviewWindow) -> tauri::Result<()> {
+    w.unminimize()?;
+    w.show()?;
+    w.set_always_on_top(true)?;
+    w.set_always_on_top(false)?;
+    w.set_focus()
+}
+
 /// Окно настроек: обычное, одно на всё приложение. Открыто — поднять его, а не строить второе.
 /// Пока идёт первый запуск, настраивать нечего — поднимаем мастер.
 /// Закрытие этого окна программу не закрывает: питомец и миска остаются.
 fn show_settings(app: &AppHandle) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window("settings").or_else(|| app.get_webview_window("setup")) {
-        w.unminimize()?;
-        w.show()?;
-        return w.set_focus();
+        return raise(&w);
     }
-    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
+    let w = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html".into()))
         .title(i18n::tr("DeskPartner — настройки", "DeskPartner — settings"))
         .inner_size(560.0, 752.0)
         .min_inner_size(460.0, 512.0)
@@ -272,7 +282,7 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
         .center()
         .focused(true)
         .build()?;
-    Ok(())
+    raise(&w)
 }
 
 /// async по той же причине, что и finish_setup: окно из синхронной команды вешает Windows (wry#583).
@@ -285,11 +295,9 @@ async fn open_settings(app: AppHandle) -> Result<(), String> {
 /// поэтому меньше настроек и закрывается без последствий.
 fn show_stats(app: &AppHandle) -> tauri::Result<()> {
     if let Some(w) = app.get_webview_window("stats") {
-        w.unminimize()?;
-        w.show()?;
-        return w.set_focus();
+        return raise(&w);
     }
-    WebviewWindowBuilder::new(app, "stats", WebviewUrl::App("index.html".into()))
+    let w = WebviewWindowBuilder::new(app, "stats", WebviewUrl::App("index.html".into()))
         .title(i18n::tr("DeskPartner — статистика", "DeskPartner — stats"))
         .inner_size(560.0, 640.0)
         .min_inner_size(400.0, 360.0)
@@ -298,7 +306,7 @@ fn show_stats(app: &AppHandle) -> tauri::Result<()> {
         .center()
         .focused(true)
         .build()?;
-    Ok(())
+    raise(&w)
 }
 
 /// async — как open_settings.
@@ -353,13 +361,31 @@ async fn name_pet(app: AppHandle, name: String) {
 }
 
 /// Конец помодоро, мс Unix-времени; 0 — фокуса нет. Присылает окно кошки (set_focus): в трее тогда
-/// «Отменить фокус» с остатком минут вместо «Фокус 25 минут». Сам фокус живёт в окне кошки.
+/// «Отменить фокус» с остатком минут вместо «Фокус N минут». Сам фокус живёт в окне кошки.
 static FOCUS_UNTIL: AtomicU64 = AtomicU64::new(0);
 
-/// Окно кошки начало (`until` — когда кончится) или кончило помодоро (0).
+/// Длина фокуса по умолчанию и пределы ползунка «Таймер», минут — как в lib/pomodoro.ts.
+const FOCUS_MIN: u32 = 25;
+const FOCUS_MIN_LO: u32 = 1;
+const FOCUS_MIN_HI: u32 = 180;
+
+/// Последняя длина фокуса, минут: её помнят настройки кошки, сюда она приходит с set_focus,
+/// чтобы пункт трея сразу звал «Фокус 40 минут» с прошлой длиной.
+static FOCUS_LEN: AtomicU32 = AtomicU32::new(FOCUS_MIN);
+
+/// Окно кошки начало (`until` — когда кончится) или кончило помодоро (0). `minutes` — длина,
+/// с которой начали (или прошлая из настроек при запуске); нет — прежняя.
 #[tauri::command]
-fn set_focus(until: u64) {
+fn set_focus(until: u64, minutes: Option<u32>) {
     FOCUS_UNTIL.store(until, Ordering::Relaxed);
+    if let Some(m) = minutes {
+        FOCUS_LEN.store(focus_minutes(m), Ordering::Relaxed);
+    }
+}
+
+/// Длина в пределах ползунка: пришедшее из меню или окна кошки не обязано быть честным.
+fn focus_minutes(m: u32) -> u32 {
+    m.clamp(FOCUS_MIN_LO, FOCUS_MIN_HI)
 }
 
 /// Минут до конца фокуса с округлением вверх; None — фокуса нет или он уже кончился.
@@ -388,6 +414,26 @@ fn boss(app: &AppHandle) {
     }
 }
 
+/// «Фокус N минут» с ползунком «Таймер» под ним, начиная с прошлой длины `minutes`. Текст — шаблон:
+/// число и форму слова подставляет окно меню, пока тянут ползунок (lib/menu.ts, fill), а выбор
+/// вернётся как "focus:N" (tray_pick).
+fn focus_entry(minutes: u32) -> menu::Item {
+    use i18n::tr;
+    menu::Item::Entry {
+        id: "focus".into(),
+        text: tr("Фокус {n} {минута|минуты|минут}", "Focus for {n} {minute|minutes}").into(),
+        checked: None,
+        hint: Some(tr("кошка поспит на таймере", "the cat naps on a timer").into()),
+        disabled: false,
+        slider: Some(menu::Slider {
+            min: FOCUS_MIN_LO,
+            max: FOCUS_MIN_HI,
+            value: focus_minutes(minutes),
+            label: tr("Таймер", "Timer").into(),
+        }),
+    }
+}
+
 /// Пункты меню трея: то же пиксельное меню, что у кошки по ПКМ (menu.rs).
 fn tray_items() -> Vec<menu::Item> {
     use i18n::tr;
@@ -397,6 +443,7 @@ fn tray_items() -> Vec<menu::Item> {
         checked: None,
         hint: hint.map(Into::into),
         disabled: false,
+        slider: None,
     };
     let mut items = Vec::new();
     // проверить облачко, голод, мышь, клубок, новость, месть, лоток, муху и подарок, не дожидаясь сроков; в релиз не попадает
@@ -425,13 +472,13 @@ fn tray_items() -> Vec<menu::Item> {
         // шапка с именем, как в меню кошки; ведёт в статистику
         items.extend([entry("stats", &name, None), menu::Item::Separator { separator: true }]);
     }
-    // помодоро: идёт — отменить, нет — включить; то же в меню кошки (lib/pomodoro.ts)
+    // помодоро: идёт — отменить, нет — включить; то же в меню кошки (lib/pomodoro.ts, menuEntry)
     items.push(match focus_left(FOCUS_UNTIL.load(Ordering::Relaxed), unix_ms()) {
         Some(m) => {
             let hint = if i18n::en() { format!("{m} min left") } else { format!("ещё {m} мин") };
             entry("focus-cancel", tr("Отменить фокус", "Cancel focus"), Some(&hint))
         }
-        None => entry("focus", tr("Фокус 25 минут", "Focus for 25 minutes"), Some(tr("кошка поспит на таймере", "the cat naps on a timer"))),
+        None => focus_entry(FOCUS_LEN.load(Ordering::Relaxed)),
     });
     items.extend([
         // кошка умеет уходить за край экрана — отсюда её зовут обратно
@@ -461,6 +508,17 @@ fn tray_items() -> Vec<menu::Item> {
 
 /// Выбрали пункт в меню трея (menu.rs зовёт сюда вместо события окну).
 pub(crate) fn tray_pick(app: &AppHandle, id: &str) {
+    match menu::picked(id) {
+        // фокус с ползунка: длину — окну кошки, оно и запомнит её в настройках
+        ("focus", Some(m)) => {
+            if let Err(err) = app.emit_to("pet", "focus", focus_minutes(m)) {
+                eprintln!("focus: {err}");
+            }
+            return;
+        }
+        (_, Some(_)) => return,
+        _ => {}
+    }
     match id {
         // ставить — через окно кошки: ему надо успеть дописать файлы
         "update" => {
@@ -627,5 +685,26 @@ mod tests {
         assert_eq!(focus_left(25 * 60_000, 0), Some(25));
         assert_eq!(focus_left(25 * 60_000, 1), Some(25));
         assert_eq!(focus_left(60_000, 59_999), Some(1));
+        // длина любая: три часа — 180 минут, минута — одна
+        assert_eq!(focus_left(180 * 60_000, 0), Some(180));
+        assert_eq!(focus_left(60_000, 0), Some(1));
+    }
+
+    #[test]
+    fn focus_length_stays_on_the_slider() {
+        assert_eq!(focus_minutes(0), 1);
+        assert_eq!(focus_minutes(40), 40);
+        assert_eq!(focus_minutes(500), 180);
+        assert_eq!(FOCUS_MIN, 25);
+    }
+
+    #[test]
+    fn tray_focus_entry_carries_the_last_length() {
+        let menu::Item::Entry { id, text, slider, .. } = focus_entry(40) else { panic!("не пункт") };
+        assert_eq!(id, "focus");
+        assert!(text.contains("{n}"));
+        assert_eq!(slider, Some(menu::Slider { min: 1, max: 180, value: 40, label: i18n::tr("Таймер", "Timer").into() }));
+        let menu::Item::Entry { slider, .. } = focus_entry(999) else { panic!("не пункт") };
+        assert_eq!(slider.map(|s| s.value), Some(180));
     }
 }

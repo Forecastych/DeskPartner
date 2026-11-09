@@ -9,6 +9,8 @@
   import { dayKey } from './lib/chatter';
   import * as diary from './lib/diary';
   import * as awards from './lib/awards';
+  import * as gift from './lib/gift';
+  import { giftFrame } from './lib/giftArt';
   import * as holidays from './lib/holidays';
   import { t } from './lib/i18n';
   import { parse } from './lib/settings';
@@ -62,6 +64,18 @@
   const holiday = $derived(holidays.outfit(new Date(now)) !== null);
 
   const SIT: Frame = ANIMS[0].sit.frames[0];
+  /** Мышка-трофей без пустого неба над ней: в кадре окна подарка она лежит в нижних рядах. */
+  const PREY: Frame = giftFrame().slice(22);
+
+  /** Подарок на 100 дней: из файла, потом от кошки. Трофей можно прятать и показывать без обиды. */
+  let present = $state<gift.Gift | null>(null);
+
+  function toggleGift() {
+    if (!present) return;
+    const next = gift.toggle(present);
+    emitTo('pet', next.hidden ? 'gift-hide' : 'gift-show').catch(console.error);
+    present = next;
+  }
 
   /** Кошка в наряде на маленьком холсте: пиксели 1:1, увеличивает CSS. */
   function paint(canvas: HTMLCanvasElement, frame: Frame) {
@@ -118,6 +132,12 @@
       })
       .catch(console.error);
     const offAwards = win.listen<awards.Prize>('awards', (e) => takePrize(awards.load(JSON.stringify(e.payload))));
+    invoke<string | null>('load_state', { key: 'gift' })
+      .then((raw) => {
+        if (!present) present = gift.load(raw);
+      })
+      .catch(console.error);
+    const offGift = win.listen<string>('gift', (e) => (present = gift.load(e.payload)));
     const ask = () => emitTo('pet', 'stats-ask').catch(console.error);
     ask();
     const id = setInterval(ask, ASK_MS);
@@ -126,6 +146,7 @@
       off.then((f) => f());
       offDiary.then((f) => f());
       offAwards.then((f) => f());
+      offGift.then((f) => f());
     };
   });
 </script>
@@ -200,6 +221,16 @@
         {:else}
           <Hint>{t('Пока ни одного — первое совсем близко.', 'None yet, but the first one is close.')}</Hint>
         {/if}
+        {#if present && gift.trophy(present)}
+          <div class="award trophy ui-px">
+            <canvas class="prey" width="32" height={PREY.length} aria-hidden="true" use:paint={PREY}></canvas>
+            <span class="what">
+              <b>{t('Мышка-трофей', 'Trophy mouse')}</b>
+              <small>{present.hidden ? t('спрятана, кошка не в обиде', 'tucked away, no hard feelings') : t('лежит на экране', 'on the screen')}</small>
+            </span>
+            <Button onclick={toggleGift}>{present.hidden ? t('Показать подарок', 'Show gift') : t('Спрятать подарок', 'Hide gift')}</Button>
+          </div>
+        {/if}
         {#if board.next.length}
           <h3>{t('Следующие', 'Up next')}</h3>
           <ul class="awards">
@@ -225,9 +256,9 @@
       {#if own.length}
         <Section title={t('Наряд', 'Outfit')} rule>
           <div class="wardrobe">
-            <Radio variant="card" name="wear" value="auto" bind:group={choice} onchange={wear} hint={t('новый наряд', 'newest')}>
+            <Radio variant="card" name="wear" value="auto" bind:group={choice} onchange={wear} hint={t('последний открытый', 'latest unlocked')}>
               <canvas class="cat" width="32" height="32" use:paint={dress(SIT, prize ? awards.worn({ ...prize, wear: null }) : null)}></canvas>
-              {t('Сама', 'Auto')}
+              {t('Новинка', 'Newest')}
             </Radio>
             <Radio variant="card" name="wear" value="none" bind:group={choice} onchange={wear}>
               <canvas class="cat" width="32" height="32" use:paint={SIT}></canvas>
@@ -413,6 +444,24 @@
     flex: none;
     text-align: right;
     white-space: nowrap;
+  }
+  /* трофей: мышка, подпись и кнопка; в узком окне кнопка уходит на свою строку */
+  .trophy {
+    flex-wrap: wrap;
+    margin: 0 var(--ui-b) var(--ui-s3);
+  }
+  .trophy .what {
+    min-width: 120px;
+  }
+  .trophy :global(.btn) {
+    flex: none;
+    margin-left: auto;
+  }
+  .prey {
+    flex: none;
+    width: 64px;
+    height: 20px;
+    image-rendering: pixelated;
   }
   .wardrobe {
     display: flex;

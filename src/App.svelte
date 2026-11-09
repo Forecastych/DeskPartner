@@ -24,6 +24,7 @@
   import * as sleepy from './lib/sleep';
   import * as pomodoro from './lib/pomodoro';
   import { focusFrame } from './lib/hourglass';
+  import { picked } from './lib/menu';
   import * as tally from './lib/stats';
   import * as diary from './lib/diary';
   import * as chrono from './lib/chrono';
@@ -343,6 +344,8 @@
   let giftFall = false;
   let giftNow = false;
   let lastGift = '';
+  /** Когда снова гордо пройтись у трофея (gift.nextProud): редко, раз в несколько часов. */
+  let nextProud = gift.nextProud(Date.now(), Math.random());
   /** Самая важная программа дня по трекеру: спрашиваем, только пока кошка в обиде. */
   let topApp: string | null = null;
   let lastPuddle = '';
@@ -411,7 +414,8 @@
     if (bedPlace && bed) [bedFall, bedPlace] = [bedFall || fell(bedPlace, bed), bed];
     const tray = litterPlace && roam.litterAt(world, litterPlace);
     if (litterPlace && tray) [litterFall, litterPlace] = [litterFall || fell(litterPlace, tray), tray];
-    const prey = present.place && gift.lying(present) ? roam.giftAt(world, present.place) : null;
+    // спрятанный трофей стоит, где был: найдёт опору, когда его покажут
+    const prey = present.place && gift.shown(present) ? roam.giftAt(world, present.place) : null;
     if (present.place && prey) [giftFall, present] = [giftFall || fell(present.place, prey), gift.moved(present, prey)];
   }
 
@@ -453,9 +457,9 @@
     emitTo('litter', 'litter', { on: litterOn, ...at, fall, clumps: box.clumps, wear }).catch(console.error);
   }
 
-  /** Окно подарка: лежит — там, где положила или куда перетащили; принят — трофей; нет — пустое и сквозное. */
+  /** Окно подарка: лежит — там, где положила или куда перетащили; принят — трофей; нет или спрятан — пустое и сквозное. */
   function tellGift() {
-    const on = gift.lying(present);
+    const on = gift.shown(present);
     const at = windowAt(world && on ? roam.giftAt(world, present.place) : null);
     const fall = giftFall;
     giftFall = false;
@@ -720,7 +724,9 @@
     // за край досыпает по своим часам и, вернувшись, засыпает уже на таймере
     const timed = pomodoro.focusing(focus) && sleepy.mood(nap) !== 'away';
     if (timed && !carried && !busy() && !mouse.owns(hunt) && !yarn.owns(game) && now >= eatUntil) nap = pomodoro.lull(nap);
-    const [rested, mood] = watching ? [nap, null] : timed ? [pomodoro.doze(nap, dt), null] : sleepy.step(nap, dt, humanIdle, tired(), trait().sleepy);
+    // фокус кончился, «Перерыв!» ещё не сказан — не засыпает, ждёт облачка (pomodoro.awaiting)
+    const waiting = pomodoro.awaiting(focus) && sleepy.mood(nap) === 'awake';
+    const [rested, mood] = watching || waiting ? [nap, null] : timed ? [pomodoro.doze(nap, dt), null] : sleepy.step(nap, dt, humanIdle, tired(), trait().sleepy);
     nap = rested;
     if (mood === 'sleep') {
       stats.naps++;
@@ -913,6 +919,14 @@
     if (!pet || !senses || giving || speakingUntil || flyAt || !(giftNow || gift.due(present, stats.together)) || !canGift(now)) return false;
     if (giftNow) return pet.move !== 'out';
     return idle(now) && !senses.typing && (moment(now, senses).pause || humanIdle);
+  }
+
+  /**
+   * Гордо пройтись у трофея пора: срок подошёл, трофей на виду, облачка нет, кошка свободна (не спит,
+   * не ест, не фокус, мешать можно) и стоит без дела.
+   */
+  function proudTime(now: number): boolean {
+    return now >= nextProud && present.state === 'kept' && gift.shown(present) && !!pet && !speakingUntil && !flyAt && canGift(now) && idle(now);
   }
 
   /** Убрали подарок, и она уже идёт за ним, уносит или ест: меню подарка ничего не меняет. */
@@ -1417,6 +1431,12 @@
       if (started) [giving, pet] = started;
       giftNow = false;
     }
+    // трофей на виду — изредка гордо проходит рядом; не вышло подойти — до следующего раза
+    if (!giving && !potty && !payback && !hunt && !game && pet && world && proudTime(now)) {
+      const started = gift.strut(world, pet, present.place, now);
+      if (started) [giving, pet] = started;
+      nextProud = gift.nextProud(now, Math.random());
+    }
     const was = pet && `${pet.move} ${pet.hunt?.mode}`;
     // мышь бегает и пока кошку несут: погоню это прерывает, но мышь удирает своим ходом
     let ruled = false;
@@ -1501,7 +1521,8 @@
       let e: roam.RoamEvent | null;
       let p: roam.Pet;
       let cue: gift.Cue | null;
-      [giving, p, cue, e] = gift.tick(giving, world, pet, present.place, now, dt);
+      // спрятанный трофей для сценки — как нет его: гордая прогулка кончается
+      [giving, p, cue, e] = gift.tick(giving, world, pet, gift.shown(present) ? present.place : null, now, dt);
       if (acting) [pet, event, ruled] = [p, e, true];
       if (cue) presented(cue, now);
       if (giving.phase === 'done') giving = null;
@@ -1558,7 +1579,7 @@
       if (`${pet.move} ${pet.hunt?.mode}` !== was) render();
       else place();
     }
-    const perched = pet?.hwnd != null || bowlPlace?.hwnd != null || (bedOn && bedPlace?.hwnd != null) || (litterOn && litterPlace?.hwnd != null) || (gift.lying(present) && present.place?.hwnd != null);
+    const perched = pet?.hwnd != null || bowlPlace?.hwnd != null || (bedOn && bedPlace?.hwnd != null) || (litterOn && litterPlace?.hwnd != null) || (gift.shown(present) && present.place?.hwnd != null);
     if (now - lastWorld >= (perched ? PERCH_WORLD_MS : WORLD_MS)) survey();
   }
 
@@ -1831,8 +1852,8 @@
         text: t('Расскажи новость', 'Tell me the news'),
         hint: topics.length ? t('по выбранным темам', 'on your topics') : t('сначала выбери темы', 'pick topics first'),
       },
-      // «Фокус 25 минут», а пока идёт — «Отменить фокус» с остатком минут
-      pomodoro.menuEntry(focus, Date.now()),
+      // «Фокус N минут» с ползунком «Таймер» под ним, а пока идёт — «Отменить фокус» с остатком минут
+      pomodoro.menuEntry(focus, Date.now(), s.focusMin),
       { separator: true },
       {
         id: 'feeder',
@@ -1855,7 +1876,9 @@
     invoke('open_menu', { owner: 'pet', items }).catch(console.error);
   }
 
-  function menuPick(id: string) {
+  function menuPick(pick: string) {
+    // у пункта с ползунком выбор приходит с числом: «focus:40» — фокус на 40 минут
+    const [id, n] = picked(pick);
     if (id === 'feeder' || id === 'bed' || id === 'litter' || id === 'hideFromCapture' || id === 'hunter' || id === 'hunterArea' || id === 'yarn') toggle(id);
     else if (id === 'laser') invoke('set_laser', { on: dot === null }).catch(console.error);
     else if (id === 'settings') invoke('open_settings').catch(console.error);
@@ -1865,20 +1888,29 @@
     else if (id === 'news' && topics.length) newsNow();
     else if (id === 'news') invoke('open_settings').catch(console.error);
     else if (id === 'about') invoke(petName ? 'open_stats' : 'open_settings').catch(console.error);
-    else if (id === 'focus') startFocus();
+    else if (id === 'focus') startFocus(n);
     else if (id === 'focus-cancel') cancelFocus();
   }
 
   /**
-   * «Фокус 25 минут» из меню кошки или трея: всё бросает и засыпает на таймере (live), облачко
-   * убирает сразу. Трею — срок, чтобы пункт стал «Отменить фокус» с остатком минут.
+   * «Фокус N минут» из меню кошки или трея: всё бросает и засыпает на таймере (live), облачко
+   * убирает сразу. `minutes` — с ползунка; нет — прошлая длина из настроек. Новая длина
+   * запоминается (как галочка в меню — с окном настроек заодно), трею — срок и длина, чтобы
+   * пункт стал «Отменить фокус» с остатком минут, а после — «Фокус N минут» с этой же длиной.
    */
-  function startFocus() {
+  function startFocus(minutes?: unknown) {
     if (frozen) return;
-    focus = pomodoro.start(Date.now());
+    const s = parse(store.get('settings'));
+    const m = minutes === undefined || minutes === null ? s.focusMin : pomodoro.focusMinutes(minutes);
+    if (m !== s.focusMin) {
+      s.focusMin = m;
+      store.set('settings', serialize(s));
+      emitTo('settings', 'settings', s).catch(console.error);
+    }
+    focus = pomodoro.start(Date.now(), m);
     pettedUntil = 0;
     if (speakingUntil) hush();
-    invoke('set_focus', { until: focus.until }).catch(console.error);
+    invoke('set_focus', { until: focus.until, minutes: m }).catch(console.error);
     render();
   }
 
@@ -1896,8 +1928,8 @@
     render();
   }
 
-  /** Облачко «Перерыв!» висит минуту: кнопку надо успеть заметить, а ныть весь перерыв незачем. */
-  const OFFER_MS = 60_000;
+  /** Облачко «Перерыв!» висит 5 с: позвала и ушла, перерыв (breakMs) идёт дальше без него. */
+  const OFFER_MS = 5_000;
 
   /**
    * Облачко «Перерыв! Поиграем?» с кнопкой «Лазер». Ждёт, пока человеку можно мешать: созвон, игра
@@ -1962,6 +1994,11 @@
   /** Окну статистики — достижения: полученные, ближайшие и наряд. Окно закрыто — событие никуда не уйдёт. */
   function sendAwards() {
     emitTo('stats', 'awards', prize).catch(console.error);
+  }
+
+  /** Окну статистики — подарок, как в файле: есть ли трофей и спрятан ли (кнопка «Показать/Спрятать»). */
+  function sendGift() {
+    emitTo('stats', 'gift', gift.save(present)).catch(console.error);
   }
 
   /**
@@ -2031,6 +2068,8 @@
       // имя — репликам и трею; иначе после перезапуска кошка безымянная, пока не тронешь настройки
       petName = settings.name;
       if (petName) invoke('name_pet', { name: petName }).catch(console.error);
+      // трей показывает «Фокус N минут» с прошлой длиной, а не с 25 по умолчанию
+      invoke('set_focus', { until: 0, minutes: settings.focusMin }).catch(console.error);
       talk = chatter.load(store.get('talk'), Date.now(), chatterLevel, Math.random, trait().talky);
       bowlPlace = loadPlace('bowl');
       bedPlace = loadPlace('bed');
@@ -2142,17 +2181,32 @@
       persist(now);
       render();
     });
-    // «Убрать»: ждущий подарок — обижается, уносит мышь за край, ест там и спит; трофей убирают молча.
-    // Не может пойти (спит, за краем, занята) — подарок просто пропадает
+    // «Спрятать подарок» (ПКМ по трофею, окно статистики) и «Показать подарок» (окно статистики): без
+    // обиды, место помнится; показанный встаёт на свою опору, а нет её — падает ниже
+    const setGift = (next: gift.Gift) => {
+      if (next === present) return;
+      present = next;
+      resettle();
+      lastGift = '';
+      persist(Date.now());
+      sendGift();
+      render();
+    };
+    const ungiftHide = listen('gift-hide', () => setGift(gift.hide(present)));
+    const ungiftShow = listen('gift-show', () => setGift(gift.show(present)));
+    // «Убрать»: ждущий подарок — обижается, уносит мышь за край, ест там и спит. Не может пойти (спит,
+    // за краем, занята) — подарок просто пропадает. Трофей навсегда не убирают — он прячется, без обиды
     const unremove = listen('gift-remove', () => {
       const now = Date.now();
       if (!gift.lying(present) || taking()) return;
+      const [next, hurt] = gift.refuse(present);
+      if (!hurt) return setGift(next);
       if (giving?.phase === 'wait') giving = null;
-      const back = present.state === 'given' && !giving && pet && world && canGift(now) ? gift.takeBack(world, pet, present.place, now) : null;
+      const back = !giving && pet && world && canGift(now) ? gift.takeBack(world, pet, present.place, now) : null;
       if (back) {
         [giving, pet] = back;
         giftSay(gift.hurtLine(), now);
-      } else present = gift.remove();
+      } else present = next;
       persist(now);
       render();
     });
@@ -2192,9 +2246,12 @@
     const unfly = listen('dev-fly', () => {
       if (!bossed && !flyAt && free()) startFly(Date.now());
     });
-    // «Подарок» оттуда же: заново, мимо 2400 часов и «раз за жизнь»; пока мышка лежит — не дарит
+    // «Подарок» оттуда же: заново, мимо 2400 часов и «раз за жизнь»; пока мышка лежит — не дарит.
+    // Трофей на виду — гордо пройдётся у него, как только будет свободна
     const ungift = listen('dev-gift', () => {
-      if (gift.lying(present) || giving) return;
+      if (giving) return;
+      if (present.state === 'kept' && gift.shown(present)) nextProud = 0;
+      if (gift.lying(present)) return;
       present = gift.fresh();
       giftNow = true;
     });
@@ -2215,8 +2272,9 @@
       revengeNow = true;
     });
     // нашлась версия новее (update.rs): пункт в меню; ставить зовут и из трея
-    // «Фокус 25 минут» и «Отменить фокус» из трея (lib.rs) — то же, что в меню кошки
-    const unfocus = listen('focus', startFocus);
+    // «Фокус N минут» и «Отменить фокус» из трея (lib.rs) — то же, что в меню кошки; длину трей
+    // шлёт с ползунка своего меню
+    const unfocus = listen<number>('focus', (e) => startFocus(e.payload));
     const unfocusCancel = listen('focus-cancel', cancelFocus);
     const unupdate = listen<string>('update', (e) => {
       updateTo = e.payload;
@@ -2248,6 +2306,7 @@
       emitTo('stats', 'stats', stats).catch(console.error);
       emitTo('stats', 'diary', { today: today && diary.facts(today, stats), pages }).catch(console.error);
       sendAwards();
+      sendGift();
     });
     // наряд выбрали в окне статистики: наряд, «без наряда» или «сама»
     const unwear = win.listen<unknown>('wear', (e) => {
@@ -2321,7 +2380,7 @@
       clearInterval(id);
       const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn, unnews, unrevenge, unupdate, uninstall];
       offs.push(unlitterHello, unlitterDrop, unlitterGrab, unscoop, unchange, unlitter, unfly, unfocus, unfocusCancel, ungrow);
-      offs.push(ungiftHello, ungiftDrop, unaccept, unremove, ungift);
+      offs.push(ungiftHello, ungiftDrop, unaccept, unremove, ungift, ungiftHide, ungiftShow);
       for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, unstats, unwear, undrag, unlaser, unlaserOff, unshoo, unvote, unact, unboss, unshot, uncrunch]) off.then((f) => f());
     };
   });

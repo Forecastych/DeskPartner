@@ -3,16 +3,22 @@
   // одной мышью: подсветка по наведению, выбор — отпустить кнопку на пункте. Esc и клик мимо
   // ловит Rust (menu.rs), сюда они не доходят.
   //
+  // У пункта может быть ползунок (длина фокуса): его тянут мышью или колесом, текст пункта
+  // меняется на лету, а клик по пункту отдаёт «id:число». Отдельного окна-диалога ради одного
+  // числа не нужно, и трей получает его даром — его меню рисуется этим же окном.
+  //
   // Rust прислал пункты ("menu-items") — рисуем, меряем и отдаём размер в физических пикселях
   // (menu_size); ставит и показывает окно уже Rust. Спрятанный WebView может не крутить кадры,
   // поэтому меряем сразу после tick(), без requestAnimationFrame и ResizeObserver.
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
   import { onMount, tick } from 'svelte';
-  import { isSeparator, type MenuItem, type MenuShow } from './lib/menu';
-  import { Icon } from './ui';
+  import { fill, isSeparator, pickId, type MenuEntry, type MenuItem, type MenuShow } from './lib/menu';
+  import { Icon, Slider } from './ui';
 
   let items: MenuItem[] = $state([]);
+  /** Числа ползунков по номеру пункта: тянут — текст пункта над ползунком меняется сразу. */
+  let values: number[] = $state([]);
   let gen = 0;
   let box: HTMLDivElement;
   /** Пункт, на котором нажали кнопку: выбор — отпустить на нём же. */
@@ -33,11 +39,31 @@
     downOn = e.button === 0 || e.button === 2 ? id : null;
   }
 
-  function up(e: PointerEvent, id: string, disabled?: boolean) {
-    const hit = downOn === id;
+  function up(e: PointerEvent, item: MenuEntry, i: number) {
+    const hit = downOn === item.id;
     downOn = null;
-    if (!hit || disabled || (e.button !== 0 && e.button !== 2)) return;
-    invoke('menu_pick', { gen, id }).catch(console.error);
+    if (!hit || item.disabled || (e.button !== 0 && e.button !== 2)) return;
+    invoke('menu_pick', { gen, id: pickId(item, values[i]) }).catch(console.error);
+  }
+
+  /**
+   * Невидимые варианты текста пункта с ползунком — самые длинные числа со всеми формами слова.
+   * Ширину меню они держат с запасом: окно мерится один раз при показе, и «Фокус 180 минут» не
+   * должен вылезти за край, если открыли на «Фокус 5 минут».
+   */
+  function widest(item: MenuEntry): string[] {
+    const s = item.slider;
+    if (!s) return [];
+    const out = new Set<string>();
+    for (let n = Math.max(s.min, s.max - 20); n <= s.max; n++) out.add(fill(item.text, n));
+    return [...out];
+  }
+
+  /** Колесо над ползунком — по одному делению: мышью до минуты на узкой дорожке не попасть. */
+  function wheel(e: WheelEvent, item: MenuEntry, i: number) {
+    const s = item.slider;
+    if (!s || item.disabled || e.deltaY === 0) return;
+    values[i] = Math.min(s.max, Math.max(s.min, values[i] + (e.deltaY < 0 ? 1 : -1)));
   }
 
   onMount(() => {
@@ -45,6 +71,7 @@
     const off = win.listen<MenuShow>('menu-items', async (e) => {
       gen = e.payload.gen;
       items = e.payload.items;
+      values = items.map((i) => (!isSeparator(i) && i.slider ? i.slider.value : 0));
       downOn = null;
       await tick();
       report();
@@ -92,7 +119,7 @@
           aria-disabled={item.disabled || undefined}
           class={['item', item.disabled && 'off']}
           onpointerdown={(e) => down(e, item.id)}
-          onpointerup={(e) => up(e, item.id, item.disabled)}
+          onpointerup={(e) => up(e, item, i)}
         >
           {#if ticks}
             <span class="tick">
@@ -100,10 +127,36 @@
             </span>
           {/if}
           <span class="text">
-            {item.text}
+            {#if item.slider}
+              <span class="fit">
+                <span>{fill(item.text, values[i])}</span>
+                {#each widest(item) as ghost}<span class="ghost" aria-hidden="true">{ghost}</span>{/each}
+              </span>
+            {:else}
+              {item.text}
+            {/if}
             {#if item.hint}<small>{item.hint}</small>{/if}
           </span>
         </button>
+        {#if item.slider}
+          <!-- ползунок под своим пунктом: тянуть — выбрать число, клик по пункту — пуск -->
+          <div class="range">
+            {#if ticks}<span class="tick"></span>{/if}
+            <span class="label">{item.slider.label}</span>
+            <div class="track">
+              <Slider
+                min={item.slider.min}
+                max={item.slider.max}
+                bind:value={values[i]}
+                disabled={item.disabled}
+                tabindex={-1}
+                onwheel={(e) => wheel(e, item, i)}
+                aria-label={item.slider.label}
+                aria-valuetext={fill(item.text, values[i])}
+              />
+            </div>
+          </div>
+        {/if}
       {/if}
     {/each}
   </div>
@@ -169,6 +222,33 @@
     color: var(--ui-muted);
     font-size: 12px;
     line-height: 1.3;
+  }
+
+  /* все варианты текста в одной клетке: видно один, а ширину держит самый длинный */
+  .fit {
+    display: grid;
+  }
+  .fit > span {
+    grid-area: 1 / 1;
+  }
+  .ghost {
+    visibility: hidden;
+  }
+
+  .range {
+    display: flex;
+    gap: var(--ui-s2);
+    align-items: center;
+    padding: 0 var(--ui-s3) var(--ui-s1);
+  }
+  .label {
+    flex: none;
+    color: var(--ui-muted);
+    font-size: 12px;
+  }
+  .track {
+    flex: 1;
+    min-width: 96px;
   }
 
   .sep {

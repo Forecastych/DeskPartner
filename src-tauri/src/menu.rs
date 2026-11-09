@@ -45,10 +45,34 @@ pub enum Item {
         hint: Option<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         disabled: bool,
+        /// Есть — под пунктом ползунок, а `text` — шаблон (`{n}`, `{минута|минуты|минут}`), число
+        /// в нём подставляет окно меню; выбор приходит как "id:число" (lib/menu.ts).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slider: Option<Slider>,
     },
     Separator {
         separator: bool,
     },
+}
+
+/// Ползунок под пунктом меню: пределы, с чего начать, подпись слева.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct Slider {
+    pub min: u32,
+    pub max: u32,
+    pub value: u32,
+    pub label: String,
+}
+
+/// Выбор пункта с ползунком обратно: "focus:40" → ("focus", Some(40)); без числа — (id, None).
+pub fn picked(id: &str) -> (&str, Option<u32>) {
+    match id.rsplit_once(':') {
+        Some((head, n)) => match n.parse() {
+            Ok(n) => (head, Some(n)),
+            Err(_) => (id, None),
+        },
+        None => (id, None),
+    }
 }
 
 /// Что уходит окну меню: пункты и номер показа, который оно вернёт вместе с размером.
@@ -443,10 +467,48 @@ mod tests {
                     checked: Some(true),
                     hint: Some("ест сама".into()),
                     disabled: false,
+                    slider: None,
                 },
                 Item::Separator { separator: true },
-                Item::Entry { id: "settings".into(), text: "Настройки…".into(), checked: None, hint: None, disabled: false },
+                Item::Entry {
+                    id: "settings".into(),
+                    text: "Настройки…".into(),
+                    checked: None,
+                    hint: None,
+                    disabled: false,
+                    slider: None,
+                },
             ]
         );
+    }
+
+    #[test]
+    fn slider_item_round_trips_and_plain_items_stay_plain() {
+        let json = r#"{"id":"focus","text":"Фокус {n} {минута|минуты|минут}","slider":{"min":1,"max":180,"value":40,"label":"Таймер"}}"#;
+        let item: Item = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            item,
+            Item::Entry {
+                id: "focus".into(),
+                text: "Фокус {n} {минута|минуты|минут}".into(),
+                checked: None,
+                hint: None,
+                disabled: false,
+                slider: Some(Slider { min: 1, max: 180, value: 40, label: "Таймер".into() }),
+            }
+        );
+        // окну меню уходит тот же вид; у обычного пункта поля slider нет вовсе
+        assert_eq!(serde_json::to_string(&item).unwrap(), json);
+        let plain = Item::Entry { id: "quit".into(), text: "Выход".into(), checked: None, hint: None, disabled: false, slider: None };
+        assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"id":"quit","text":"Выход"}"#);
+    }
+
+    #[test]
+    fn picked_splits_the_slider_value() {
+        assert_eq!(picked("focus:40"), ("focus", Some(40)));
+        assert_eq!(picked("focus"), ("focus", None));
+        assert_eq!(picked("dev-say"), ("dev-say", None));
+        assert_eq!(picked("a:b"), ("a:b", None));
+        assert_eq!(picked("focus:-3"), ("focus:-3", None));
     }
 }

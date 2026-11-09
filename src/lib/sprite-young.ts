@@ -27,6 +27,7 @@ import {
   HEAD_TOP,
   HEART,
   inBed,
+  inFront,
   inhale,
   KIBBLE,
   MOUTH_SMUG,
@@ -76,10 +77,11 @@ const headH = (h: Head) => h.top.length + 2 + h.bottom.length;
 const KIT_HEAD: Head = {
   top: ['.k......k.', 'kpk....kpk', 'kppkkkkppk', 'kffdffdffk'],
   flat: ['..........', 'kkk....kkk', 'kppkkkkppk', 'kffdffdffk'],
-  open: ['kfwkffwkfk', 'kfkkffkkfk'],
+  // зрачки открытых глаз — ключом E, как у взрослой: у чёрного малыша контур сливается с шерстью
+  open: ['kfwEffwEfk', 'kfEEffEEfk'],
   shut: ['kffffffffk', 'kfkkffkkfk'],
   happy: ['kffkffkffk', 'kfkfkkfkfk'],
-  sleepy: ['kfddffddfk', 'kfkkffkkfk'],
+  sleepy: ['kfddffddfk', 'kfEEffEEfk'],
   bottom: ['klffppfflk', '.kllllllk.', '..kkkkkk..'],
   meow: ['klffppfflk', '.klkppklk.', '..kkkkkk..'],
   smug: ['klffppfflk', '.klkllklk.', '..kkkkkk..'],
@@ -370,8 +372,11 @@ function build(k: Kit, fat: Fat) {
 
   // Поднятая к морде лапа: от `y` до грудки.
   const raisedPaw = (y: number): Placed => [['.kk.', 'kllk', 'kllk', ...Array<string>(Math.max(0, sitTop - y - 1)).fill('kffk')], sx + 2, y];
-  const groom = (dy: number, lick: boolean): Frame =>
-    sitting(hd.shut, [...(lick ? [tongue] : []), raisedPaw(sy + dy)], hd.bottom, 0, 'right');
+  // лапа перед мордой: ошейник уходит за неё (inFront)
+  const groom = (dy: number, lick: boolean): Frame => {
+    const paw = raisedPaw(sy + dy);
+    return inFront(sitting(hd.shut, [...(lick ? [tongue] : []), paw], hd.bottom, 0, 'right'), paw);
+  };
 
   const loafBody = frontBody(fat, k.loaf, false);
   const loafHalf = loafBody[0].length / 2;

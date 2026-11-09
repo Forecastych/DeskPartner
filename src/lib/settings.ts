@@ -3,6 +3,7 @@
 // Исключение — «прятать от записи экрана»: питомец в чужом скриншоте выдаёт больше, чем хотелось бы.
 
 import { LANG_PREFS, pick, type Lang, type LangPref } from './i18n';
+import { FOCUS_MIN, focusMinutes } from './pomodoro';
 
 export const TOPICS = [
   'футбол',
@@ -152,6 +153,8 @@ export interface Settings {
   updates: boolean;
   /** Как выглядит питомец, когда выбор формы открыт; до этого не действует. Меняет только внешность. */
   form: Form;
+  /** Длина фокуса, минут (pomodoro.ts): последняя выбранная ползунком «Таймер» в меню. */
+  focusMin: number;
 }
 
 /** Длина строки тайтлов: десяток ссылок с запасом. */
@@ -189,6 +192,7 @@ export function defaults(): Settings {
     // без обновлений исправления до людей не доедут; спрашиваем только версию, ставим по клику
     updates: true,
     form: 'adult',
+    focusMin: FOCUS_MIN,
   };
 }
 
@@ -234,6 +238,7 @@ export function parse(raw: string | null): Settings {
     animeTitles: typeof s.animeTitles === 'string' ? s.animeTitles.trim().slice(0, ANIME_TITLES_MAX) : d.animeTitles,
     updates: bool(s.updates, d.updates),
     form: oneOf(FORMS, s.form, d.form),
+    focusMin: s.focusMin === undefined ? d.focusMin : focusMinutes(s.focusMin),
   };
 }
 

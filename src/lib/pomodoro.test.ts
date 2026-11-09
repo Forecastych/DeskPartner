@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { focusFrame, glass, GLASS_X, SHIFT } from './hourglass';
 import { setLang } from './i18n';
+import { fill, pickId, picked } from './menu';
 import {
-  BREAK_MS,
+  awaiting,
+  breakMs,
   doze,
-  FOCUS_MS,
+  FOCUS_MIN,
+  FOCUS_MIN_HI,
+  FOCUS_MIN_LO,
   focusing,
+  focusMinutes,
+  focusText,
   leftLine,
   lull,
   menuEntry,
@@ -24,6 +30,69 @@ import { fresh, mood, poke, RESTED_MS, stir, type Sleep } from './sleep';
 import { ANIMS, ground, hitMask, PALETTE, SIZE } from './sprite';
 
 const MIN = 60_000;
+/** Фокус по умолчанию — классические 25 минут, перерыв к нему — 5. */
+const FOCUS_MS = FOCUS_MIN * MIN;
+const BREAK_MS = 5 * MIN;
+
+describe('помодоро: длина', () => {
+  it('по умолчанию 25 минут, ползунок — от минуты до трёх часов', () => {
+    expect(FOCUS_MIN).toBe(25);
+    expect([FOCUS_MIN_LO, FOCUS_MIN_HI]).toEqual([1, 180]);
+    expect(start(0).until).toBe(25 * MIN);
+    expect(start(0, 40).until).toBe(40 * MIN);
+    expect(start(0, 40).minutes).toBe(40);
+  });
+
+  it('длина из настроек и событий поправляется в пределы и до целых', () => {
+    expect(focusMinutes(40)).toBe(40);
+    expect(focusMinutes(0)).toBe(1);
+    expect(focusMinutes(-5)).toBe(1);
+    expect(focusMinutes(500)).toBe(180);
+    expect(focusMinutes(12.6)).toBe(13);
+    expect(focusMinutes('45')).toBe(45);
+    for (const bad of [undefined, null, NaN, Infinity, '', 'много', {}, []]) expect(focusMinutes(bad)).toBe(25);
+    expect(start(0, 999).until).toBe(180 * MIN);
+    expect(start(0, 0).until).toBe(MIN);
+  });
+
+  it('перерыв — пятая часть фокуса, от минуты до получаса', () => {
+    expect(breakMs(25)).toBe(5 * MIN);
+    expect(breakMs(50)).toBe(10 * MIN);
+    expect(breakMs(40)).toBe(8 * MIN);
+    expect(breakMs(1)).toBe(MIN);
+    expect(breakMs(3)).toBe(MIN);
+    expect(breakMs(8)).toBe(2 * MIN);
+    expect(breakMs(150)).toBe(30 * MIN);
+    expect(breakMs(180)).toBe(30 * MIN);
+    // не убывает с длиной фокуса
+    for (let m = FOCUS_MIN_LO; m < FOCUS_MIN_HI; m++) expect(breakMs(m + 1)).toBeGreaterThanOrEqual(breakMs(m));
+  });
+
+  it('длина доезжает до перерыва через потягушки', () => {
+    let p = start(0, 90);
+    [p] = step(p, 90 * MIN) as [NonNullable<typeof p>, unknown];
+    expect(p.minutes).toBe(90);
+    [p] = step(p, p.until) as [NonNullable<typeof p>, unknown];
+    expect(p.phase).toBe('break');
+    const shown = offered(p, 1e7);
+    expect(shown.until).toBe(1e7 + 18 * MIN);
+    // минута фокуса — минута перерыва
+    let q = start(0, 1);
+    [q] = step(q, MIN) as [NonNullable<typeof q>, unknown];
+    [q] = step(q, q.until) as [NonNullable<typeof q>, unknown];
+    expect(offered(q, 0).until).toBe(MIN);
+  });
+
+  it('песок пересыпается по доле любой длины: половина часа и половина трёх часов — полчасов', () => {
+    for (const m of [1, 25, 180]) {
+      const p = start(0, m);
+      expect(progress(p, (m * MIN) / 2)).toBeCloseTo(0.5);
+      expect(glass(progress(p, (m * MIN) / 2))).toEqual(glass(0.5));
+      expect(glass(progress(p, m * MIN))).toEqual(glass(1));
+    }
+    expect(minutesLeft(start(0, 180), 0)).toBe(180);
+  });
+});
 
 describe('помодоро: фазы', () => {
   it('фокус → потягушки → перерыв → ничего, и сами по кругу не идут', () => {
@@ -48,6 +117,18 @@ describe('помодоро: фазы', () => {
     expect(gone).toBeNull();
     // нет фокуса — шагать нечего
     expect(step(null, 1e12)).toEqual([null, null]);
+  });
+
+  it('от конца фокуса до облачка кошка не засыпает, дальше — как обычно', () => {
+    let p = start(0, 1);
+    expect(awaiting(p)).toBe(false);
+    [p] = step(p, p.until) as [NonNullable<typeof p>, unknown];
+    expect(awaiting(p)).toBe(true); // потягушки
+    [p] = step(p, p.until) as [NonNullable<typeof p>, unknown];
+    expect(awaiting(p)).toBe(true); // перерыв, облачка ещё не было
+    p = offered(p, p.since);
+    expect(awaiting(p)).toBe(false); // позвала — сонная может и уснуть
+    expect(awaiting(null)).toBe(false);
   });
 
   it('потягивается STRETCH_MS — по времени кадров позы stretch, целым числом проходов', () => {
@@ -148,14 +229,44 @@ describe('помодоро: слова', () => {
     expect(offerLine(false)).toBe('Перерыв! Поиграем?');
     expect(offerLine(true)).toContain('Покормишь');
     expect(offerAct()).toBe('Лазер');
-    expect(menuEntry(null, 0)).toMatchObject({ id: 'focus', text: 'Фокус 25 минут' });
+    const idle = menuEntry(null, 0);
+    expect(idle).toMatchObject({ id: 'focus', slider: { min: 1, max: 180, value: 25, label: 'Таймер' } });
+    expect(fill(idle.text, idle.slider!.value)).toBe('Фокус 25 минут');
     expect(menuEntry(p, 0)).toMatchObject({ id: 'focus-cancel', text: 'Отменить фокус', hint: 'ещё 25 мин' });
+    // идущий фокус ползунка не показывает: длину уже выбрали
+    expect(menuEntry(p, 0).slider).toBeUndefined();
     setLang('en');
     expect(leftLine(p, 13 * MIN)).toBe('Shh, focus. 12 min left');
     expect(offerLine(false)).toBe('Break time! Shall we play?');
     expect(offerAct()).toBe('Laser');
-    expect(menuEntry(null, 0).text).toBe('Focus for 25 minutes');
+    expect(fill(menuEntry(null, 0).text, 25)).toBe('Focus for 25 minutes');
+    expect(menuEntry(null, 0).slider?.label).toBe('Timer');
     expect(menuEntry(p, 0).text).toBe('Cancel focus');
+  });
+
+  it('пункт помнит прошлую длину, а текст — минуты с нужной формой слова', () => {
+    const e = menuEntry(null, 0, 40);
+    expect(e.slider?.value).toBe(40);
+    expect(fill(e.text, 40)).toBe('Фокус 40 минут');
+    expect(fill(focusText(), 1)).toBe('Фокус 1 минута');
+    expect(fill(focusText(), 3)).toBe('Фокус 3 минуты');
+    expect(fill(focusText(), 11)).toBe('Фокус 11 минут');
+    expect(fill(focusText(), 121)).toBe('Фокус 121 минута');
+    // кривое значение из настроек ползунок не ломает
+    expect(menuEntry(null, 0, 1000).slider?.value).toBe(180);
+    expect(menuEntry(null, 0, NaN).slider?.value).toBe(25);
+    setLang('en');
+    expect(fill(focusText(), 1)).toBe('Focus for 1 minute');
+    expect(fill(focusText(), 40)).toBe('Focus for 40 minutes');
+  });
+
+  it('выбор с ползунка приходит как «focus:N» и разбирается обратно', () => {
+    const e = menuEntry(null, 0, 40);
+    expect(pickId(e, 55)).toBe('focus:55');
+    expect(picked('focus:55')).toEqual(['focus', 55]);
+    const cancel = menuEntry(start(0), 0);
+    expect(pickId(cancel, 55)).toBe('focus-cancel');
+    expect(picked('focus-cancel')).toEqual(['focus-cancel', null]);
   });
 
   it('в перерыве пункт снова «Фокус», с остатком перерыва; в потягушках — обычный', () => {
@@ -163,7 +274,7 @@ describe('помодоро: слова', () => {
     expect(menuEntry(s, FOCUS_MS).id).toBe('focus');
     const [b] = step(s, s!.until);
     const shown = offered(b!, 0);
-    expect(menuEntry(shown, 2 * MIN)).toMatchObject({ id: 'focus', hint: 'перерыв: ещё 3 мин' });
+    expect(menuEntry(shown, 2 * MIN, 25)).toMatchObject({ id: 'focus', hint: 'перерыв: ещё 3 мин', slider: { value: 25 } });
   });
 });
 

@@ -42,6 +42,15 @@ describe('настройки', () => {
     expect(parse(JSON.stringify({ breed: 3 })).breed).toBe('tabby');
   });
 
+  it('длина фокуса: по умолчанию 25, у старых настроек — тоже; мусор — 25, лишнее — в пределы', () => {
+    expect(defaults().focusMin).toBe(25);
+    expect(parse(JSON.stringify({ feeder: true })).focusMin).toBe(25);
+    expect(parse(JSON.stringify({ focusMin: 40 })).focusMin).toBe(40);
+    expect(parse(JSON.stringify({ focusMin: 999 })).focusMin).toBe(180);
+    expect(parse(JSON.stringify({ focusMin: 0 })).focusMin).toBe(1);
+    expect(parse(JSON.stringify({ focusMin: 'долго', feeder: true }))).toMatchObject({ focusMin: 25, feeder: true });
+  });
+
   it('охотник: битое поле — по умолчанию, остальное живёт', () => {
     expect(parse(JSON.stringify({ hunter: true, hunterArea: 'screen' }))).toMatchObject({ hunter: true, hunterArea: 'screen' });
     expect(parse(JSON.stringify({ hunter: 'да', hunterArea: 'desk', feeder: true }))).toMatchObject({

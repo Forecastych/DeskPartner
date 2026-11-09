@@ -9,7 +9,7 @@
   import { t } from './lib/i18n';
   import { FORMS, type Form } from './lib/settings';
   import * as tally from './lib/stats';
-  import { Group, Hint } from './ui';
+  import { Group, Hint, Slider } from './ui';
 
   interface Props {
     form: Form;
@@ -62,13 +62,10 @@
 {#if growth}
   <Group legend={t('Форма', 'Form')}>
     {#if growth.power}
-      <input
+      <Slider
         id="form"
-        class="ui-px"
-        type="range"
-        min="0"
+        min={0}
         max={FORMS.length - 1}
-        step="1"
         value={FORMS.indexOf(form)}
         oninput={pick}
         {disabled}
@@ -95,38 +92,6 @@
 {/if}
 
 <style>
-  input {
-    --lift: 0px;
-    display: block;
-    width: calc(100% - 2 * var(--ui-b));
-    height: 10px;
-    margin: var(--ui-s2) var(--ui-b);
-    background: var(--ui-soft);
-    cursor: pointer;
-    appearance: none;
-  }
-  input:disabled {
-    opacity: 0.55;
-    cursor: default;
-  }
-  input::-webkit-slider-thumb {
-    width: 14px;
-    height: 22px;
-    background: var(--ui-accent);
-    box-shadow:
-      0 calc(var(--ui-b) * -1) 0 0 var(--ui-ink),
-      0 var(--ui-b) 0 0 var(--ui-ink),
-      calc(var(--ui-b) * -1) 0 0 0 var(--ui-ink),
-      var(--ui-b) 0 0 0 var(--ui-ink);
-    appearance: none;
-  }
-  input:hover:not(:disabled)::-webkit-slider-thumb {
-    background: var(--ui-accent-hi);
-  }
-  input:focus-visible {
-    outline: 2px solid var(--ui-accent);
-    outline-offset: calc(var(--ui-b) + 4px);
-  }
   .ticks {
     display: grid;
     grid-template-columns: repeat(3, 1fr);

@@ -12,20 +12,34 @@ import {
   GIFT_GAP,
   GIVE_UP,
   given,
+  hide,
   load,
   lying,
   moved,
+  nextProud,
   owns,
+  PASS_SIDES,
   type Phase,
   pose,
+  proud,
+  PROUD_MIN,
+  PROUD_MS,
+  PROUD_SIDES,
+  PROUD_SPAN,
   PURR_MS,
   putAt,
+  refuse,
   remove,
   save,
+  show,
+  shown,
   start,
+  strut,
   takeBack,
   thank,
   tick,
+  toggle,
+  trophy,
   type Visit,
   WAIT_MS,
 } from './gift';
@@ -75,16 +89,16 @@ describe('когда дарить', () => {
 describe('подарок на диске', () => {
   it('переживает перезапуск с местом', () => {
     const kept = moved(accept(given({ x: 300, y: 1040 })), { x: 640, y: 900 });
-    expect(load(save(kept))).toEqual({ state: 'kept', place: { x: 640, y: 900 } });
-    expect(load(save(given({ x: 5, y: 6 })))).toEqual({ state: 'given', place: { x: 5, y: 6 } });
-    expect(load(save(remove()))).toEqual({ state: 'gone', place: null });
+    expect(load(save(kept))).toEqual({ state: 'kept', place: { x: 640, y: 900 }, hidden: false });
+    expect(load(save(given({ x: 5, y: 6 })))).toEqual({ state: 'given', place: { x: 5, y: 6 }, hidden: false });
+    expect(load(save(remove()))).toEqual({ state: 'gone', place: null, hidden: false });
     expect(load(save(fresh()))).toEqual(fresh());
   });
 
   it('на рамке окна помнит окно, а на диск пишет только точку', () => {
     const g = given({ x: 10.4, y: 20.6, hwnd: 7, dx: 3 });
     expect(g.place).toEqual({ x: 10.4, y: 20.6, hwnd: 7, dx: 3 });
-    expect(load(save(g))).toEqual({ state: 'given', place: { x: 10, y: 21 } });
+    expect(load(save(g))).toEqual({ state: 'given', place: { x: 10, y: 21 }, hidden: false });
     expect(moved(g, { x: 1, y: 2 }).place).toEqual({ x: 1, y: 2 });
   });
 
@@ -203,5 +217,170 @@ describe('убрали подарок', () => {
     const cat = at(empty, 400);
     expect(takeBack(empty, { ...cat, move: 'out' }, { x: 700, y: 1040 }, 0)).toBeNull();
     expect(takeBack({ monitors: [], ledges: [] }, cat, { x: 700, y: 1040 }, 0)).toBeNull();
+  });
+});
+
+describe('трофей прячут и показывают', () => {
+  const kept = accept(given({ x: 640, y: 900 }));
+
+  it('спрятанный остаётся её и на том же месте, показанный — как был', () => {
+    const h = hide(kept);
+    expect(h).toEqual({ ...kept, hidden: true });
+    expect(lying(h)).toBe(true);
+    expect(trophy(h)).toBe(true);
+    expect(shown(h)).toBe(false);
+    expect(shown(kept)).toBe(true);
+    expect(show(h)).toEqual(kept);
+    expect(toggle(kept)).toEqual(h);
+    expect(toggle(toggle(kept))).toEqual(kept);
+    // спрятать ещё раз и показать видимый — ничего не меняет
+    expect(hide(h)).toBe(h);
+    expect(show(kept)).toBe(kept);
+    // подарок раз за жизнь: спрятанный трофей — всё равно подарок был
+    expect(due(h, 5000 * HOUR)).toBe(false);
+    // перетащить можно и спрятанный — флаг не теряется
+    expect(moved(h, { x: 1, y: 2 })).toEqual({ state: 'kept', place: { x: 1, y: 2 }, hidden: true });
+  });
+
+  it('ждущий подарок не прячется, нет подарка — нечего прятать', () => {
+    const g = given({ x: 5, y: 6 });
+    for (const x of [g, fresh(), remove()]) {
+      expect(hide(x)).toBe(x);
+      expect(trophy(x)).toBe(false);
+    }
+    expect(shown(g)).toBe(true);
+  });
+
+  it('спрятанный переживает перезапуск, видимый пишется без поля hidden', () => {
+    const h = hide(kept);
+    expect(load(save(h))).toEqual(h);
+    expect(JSON.parse(save(h))).toEqual({ state: 'kept', x: 640, y: 900, hidden: true });
+    expect(JSON.parse(save(kept))).toEqual({ state: 'kept', x: 640, y: 900 });
+  });
+});
+
+describe('миграция старых сохранений', () => {
+  it('без поля hidden — трофей на виду', () => {
+    expect(load('{"state":"kept","x":640,"y":900}')).toEqual({ state: 'kept', place: { x: 640, y: 900 }, hidden: false });
+    expect(load('{"state":"given","x":5,"y":6}')).toEqual({ state: 'given', place: { x: 5, y: 6 }, hidden: false });
+    expect(load('{"state":"gone"}')).toEqual({ state: 'gone', place: null, hidden: false });
+  });
+
+  it('hidden — только true и только у трофея', () => {
+    for (const h of ['"yes"', '1', 'null', 'false']) expect(load(`{"state":"kept","x":1,"y":2,"hidden":${h}}`).hidden).toBe(false);
+    expect(load('{"state":"given","x":1,"y":2,"hidden":true}').hidden).toBe(false);
+    expect(load('{"state":"gone","hidden":true}')).toEqual(remove());
+    expect(load('{"state":"kept","hidden":true}')).toEqual(remove());
+  });
+});
+
+describe('обида — только за отказ от ждущего подарка', () => {
+  it('ждущий убрали — обижается, подарка больше нет', () => {
+    expect(refuse(given({ x: 1, y: 2 }))).toEqual([remove(), true]);
+  });
+
+  it('трофей «убрать» — спрятать, без обиды', () => {
+    const kept = accept(given({ x: 1, y: 2 }));
+    expect(refuse(kept)).toEqual([hide(kept), false]);
+    expect(refuse(hide(kept))).toEqual([hide(kept), false]);
+  });
+
+  it('нечего убирать — ничего и не меняется', () => {
+    for (const g of [fresh(), remove()]) expect(refuse(g)).toEqual([g, false]);
+  });
+});
+
+describe('гордая прогулка у трофея', () => {
+  const place = { x: 900, y: 1040 };
+
+  it('редко: раз в PROUD_MIN…PROUD_MIN + PROUD_SPAN', () => {
+    expect(PROUD_MIN).toBeGreaterThanOrEqual(HOUR);
+    expect(nextProud(1000, 0)).toBe(1000 + PROUD_MIN);
+    expect(nextProud(1000, 0.999)).toBeLessThan(1000 + PROUD_MIN + PROUD_SPAN);
+    expect(nextProud(1000, 0.5)).toBeGreaterThan(nextProud(1000, 0.1));
+  });
+
+  it('важно идёт к трофею, сидит рядом мордой к нему, потом проходит на другую сторону', () => {
+    const g = giftAt(empty, place)!;
+    const [v0, pet0] = strut(empty, at(empty, 400), place, 0)!;
+    expect(v0.phase).toBe('proud');
+    expect(proud(v0)).toBe(true);
+    let [v, pet] = [v0, pet0];
+    let t = 0;
+    const phases: Phase[] = [v.phase];
+    const poses = new Set<string>();
+    let sat: Pet | null = null;
+    let satAt = 0;
+    let cue: Cue | null = null;
+    while (owns(v) && t < 10 * GIVE_UP) {
+      [v, pet, cue] = tick(v, empty, pet, place, (t += FRAME), FRAME);
+      expect(cue).toBeNull();
+      if (v.phase !== phases[phases.length - 1]) {
+        phases.push(v.phase);
+        if (v.phase === 'show') [sat, satAt] = [pet, t];
+        if (v.phase === 'pass') expect(t - satAt).toBeGreaterThanOrEqual(PROUD_MS);
+      }
+      const ps = pose(v, pet, t);
+      if (ps) poses.add(ps);
+    }
+    expect(phases).toEqual(['proud', 'show', 'pass', 'done']);
+    for (const ps of ['strut', 'smug']) expect(poses.has(ps)).toBe(true);
+    // обычной ходьбы нет: идёт только вразвалку
+    expect(poses.has('walk')).toBe(false);
+    // подошла слева — сидит слева, мордой к трофею
+    expect(sat!.x).toBeCloseTo(g.x - PROUD_SIDES * SIDE, 0);
+    expect(sat!.facing).toBe(1);
+    // и прошла мимо на правую сторону
+    expect(pet.x).toBeCloseTo(g.x + PASS_SIDES * SIDE, 0);
+  });
+
+  it('справа подходит справа и смотрит влево', () => {
+    const g = giftAt(empty, place)!;
+    let [v, pet] = strut(empty, at(empty, 1500), place, 0)!;
+    let t = 0;
+    while (v.phase === 'proud') [v, pet] = tick(v, empty, pet, place, (t += FRAME), FRAME);
+    expect(v.phase).toBe('show');
+    expect(pet.x).toBeCloseTo(g.x + PROUD_SIDES * SIDE, 0);
+    expect(pet.facing).toBe(-1);
+    expect(pose(v, pet, t)).toBe('smug');
+  });
+
+  it('трофей спрятали по дороге — прогулка кончается', () => {
+    let [v, pet] = strut(empty, at(empty, 400), place, 0)!;
+    let t = 0;
+    for (let i = 0; i < 5; i++) [v, pet] = tick(v, empty, pet, place, (t += FRAME), FRAME);
+    [v] = tick(v, empty, pet, null, (t += FRAME), FRAME);
+    expect(v.phase).toBe('done');
+    expect(owns(v)).toBe(false);
+  });
+
+  it('трофей перетащили, пока шла, — идёт к новому месту', () => {
+    let [v, pet] = strut(empty, at(empty, 400), place, 0)!;
+    let t = 0;
+    for (let i = 0; i < 5; i++) [v, pet] = tick(v, empty, pet, place, (t += FRAME), FRAME);
+    const there = { x: 1500, y: 1040 };
+    while (v.phase === 'proud') [v, pet] = tick(v, empty, pet, there, (t += FRAME), FRAME);
+    expect(v.phase).toBe('show');
+    expect(pet.x).toBeCloseTo(giftAt(empty, there)!.x - PROUD_SIDES * SIDE, 0);
+  });
+
+  it('трофея нет, в прыжке, падении или за краем — не идёт', () => {
+    const cat = at(empty, 400);
+    expect(strut(empty, cat, null, 0)).toBeNull();
+    expect(strut({ monitors: [], ledges: [] }, cat, place, 0)).toBeNull();
+    for (const move of ['jump', 'fall', 'out'] as const) expect(strut(empty, { ...cat, move }, place, 0)).toBeNull();
+  });
+
+  it('у трофея у края экрана не уходит за край поверхности', () => {
+    const edge = { x: 0, y: 1040 };
+    let [v, pet] = strut(empty, at(empty, 600), edge, 0)!;
+    let t = 0;
+    const xs: number[] = [];
+    while (owns(v) && t < 10 * GIVE_UP) {
+      [v, pet] = tick(v, empty, pet, edge, (t += FRAME), FRAME);
+      xs.push(pet.x);
+    }
+    expect(Math.min(...xs)).toBeGreaterThanOrEqual(SIDE / 2);
+    expect(pet.move).toBe('still');
   });
 });

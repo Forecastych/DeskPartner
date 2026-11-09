@@ -75,6 +75,19 @@ const DECOR = new Set(['h', 'z', 's']);
  */
 const THROUGH = new Set([...DECOR, 'R', 'r', 'q', 'T', 't', 'i', 'v', 'V']);
 
+/**
+ * Детали кадра, которые наряд не закрывает: поднятая к морде лапа (умывание). Кадр позы их
+ * регистрирует, `dress` рисует их заново поверх наряда — ошейник уходит за лапу, а не на неё.
+ * Объявлены до поз: кадры собираются при загрузке модуля.
+ */
+const FRONT_PARTS = new WeakMap<Frame, [Part, number, number][]>();
+
+/** Отметить детали кадра, которые остаются поверх наряда; возвращает тот же кадр. */
+export function inFront(frame: Frame, ...parts: [Part, number, number][]): Frame {
+  FRONT_PARTS.set(frame, parts);
+  return frame;
+}
+
 // Голова анфас, 12×10: кошка идёт боком, но смотрит на человека.
 const HEAD_TOP: Part = [
   '.k........k.',
@@ -418,13 +431,9 @@ function grooming(fat: Fat, eyes: Part, pawY: number, tongue: boolean): Frame {
   const body = frontBody(fat, SIT_HALF, 'right');
   const half = body[0].length / 2;
   const extra: [Part, number, number][] = tongue ? [[TONGUE, 15, 21]] : [];
-  return compose(
-    [SIT_TAIL, 13 + half, 26],
-    [body, 16 - half, 22],
-    [head(eyes), 10, 12],
-    ...extra,
-    [raisedPaw(pawY), 12, pawY],
-  );
+  const paw: [Part, number, number] = [raisedPaw(pawY), 12, pawY];
+  // лапа перед мордой: ошейник и шапочка уходят за неё
+  return inFront(compose([SIT_TAIL, 13 + half, 26], [body, 16 - half, 22], [head(eyes), 10, 12], ...extra, paw), paw);
 }
 
 /** Буханка анфас: ниже, чем сидя, лапки подобраны под грудку. */
@@ -1014,12 +1023,26 @@ const CROWN_ROW = 'kppkkkkkkppk';
 const KIT_CROWN_ROW = 'kppkkkkppk';
 const hat: Part = ['........kk..', '.......kIIk.', '......kHkk..', '.....kHHk...', '....kHHHHk..', '..kIIIIIIk..'];
 const pumpkin: Part = ['.....gk.....', '...kkgkkk...', '..koOoOook..', '..kOoOoOok..', '..kkkkkkkk..'];
+/** Голова анфас в кадре: левый край и ряд макушки (как у взрослой) и малышовая ли она. */
+export interface Head {
+  x: number;
+  y: number;
+  /** Голова малыша (sprite-young.ts): на два пикселя уже и на ряд короче; у подростка голова уже взрослая. */
+  kit: boolean;
+}
+
+/** Голова анфас по ряду макушки; головы анфас нет — null. */
+export function headAt(frame: Frame): Head | null {
+  const y = frame.findIndex((row) => row.includes(CROWN_ROW));
+  if (y >= 0) return { x: frame[y].indexOf(CROWN_ROW), y, kit: false };
+  const k = frame.findIndex((row) => row.includes(KIT_CROWN_ROW));
+  return k >= 0 ? { x: frame[k].indexOf(KIT_CROWN_ROW) - 1, y: k, kit: true } : null;
+}
+
 /** Левый край и ряд макушки головы анфас, как у взрослой; головы анфас нет — null. Наряды и мышь в зубах ставятся от неё. */
 export function crownAt(frame: Frame): [number, number] | null {
-  const y = frame.findIndex((row) => row.includes(CROWN_ROW));
-  if (y >= 0) return [frame[y].indexOf(CROWN_ROW), y];
-  const k = frame.findIndex((row) => row.includes(KIT_CROWN_ROW));
-  return k >= 0 ? [frame[k].indexOf(KIT_CROWN_ROW) - 1, k] : null;
+  const head = headAt(frame);
+  return head ? [head.x, head.y] : null;
 }
 
 export const OUTFITS: Record<Outfit, Piece> = {
@@ -1028,34 +1051,62 @@ export const OUTFITS: Record<Outfit, Piece> = {
   ...WEAR_ART,
 };
 
+// Макушка так низко только у головы, уткнувшейся в пол; в остальных позах она не ниже ряда 24.
+const FACE_DOWN_ROW = SIZE - 4;
+
+/**
+ * Где наряд сидит в этом кадре: левый край и верхний ряд детали. Обычно — `dy` от макушки, но у малыша
+ * подбородок на ряд выше, чем у взрослой, и ошейник с платком поднимаются вместе с ним, а мордой в пол
+ * (faceplant) видна одна макушка: шапка не стоит на спине, а сползает на лоб — нижним рядом на ряд
+ * под макушкой. Головы анфас нет — null.
+ */
+export function outfitAt(frame: Frame, outfit: Outfit): [number, number] | null {
+  const head = headAt(frame);
+  if (!head) return null;
+  const { rows, dy, under } = OUTFITS[outfit];
+  if (under) return [head.x, head.y + dy - (head.kit ? 1 : 0)];
+  if (head.y >= FACE_DOWN_ROW) return [head.x, head.y + 2 - rows.length];
+  return [head.x, head.y + dy];
+}
+
 /**
  * Надеть наряд. Работает в любой позе, где голова анфас: ищем ряд макушки. Позы с головой
  * боком или без головы остаются как есть. Вход не трогает.
  */
 export function dress(frame: Frame, outfit: Outfit | null): Frame {
   if (!outfit) return frame;
-  const at = crownAt(frame);
+  const at = outfitAt(frame, outfit);
   if (!at) return frame;
   const [x, y] = at;
-  const { rows, dy, under } = OUTFITS[outfit];
+  const { rows, under } = OUTFITS[outfit];
   // за шкирку голова у самого верха кадра: обрезанная шапка поверх загривка хуже никакой
-  const off = rows.some((row, i) => [...row].some((c, dx) => c !== '.' && (y + dy + i < 0 || y + dy + i >= SIZE || x + dx < 0 || x + dx >= SIZE)));
+  const off = rows.some((row, i) => [...row].some((c, dx) => c !== '.' && (y + i < 0 || y + i >= SIZE || x + dx < 0 || x + dx >= SIZE)));
   if (off) return frame;
   const g = frame.map((r) => [...r]);
+  // клетки наряда, уже нарисованные: колокольчик и кончик платка висят на них и под подбородком
+  const mine = rows.map(() => Array<boolean>(rows[0].length).fill(false));
   rows.forEach((row, i) => {
-    const ty = y + dy + i;
-    if (ty < 0 || ty >= SIZE) return;
-    for (let dx = 0; dx < row.length && x + dx < SIZE; dx++) {
-      if (x + dx < 0) continue;
+    const ty = y + i;
+    for (let dx = 0; dx < row.length; dx++) {
       if (row[dx] === '.') continue;
       // сердечко и «з-з-з» остаются поверх наряда; деталь под мордой — только поверх самой
-      // кошки: миска и бортики её закрывают
+      // кошки: миска и бортики её закрывают. В пустоте она висит, только если держится за
+      // клетку наряда прямо над собой: колокольчик на ошейнике, кончик платка
       const was = g[ty][x + dx];
       if (DECOR.has(was)) continue;
-      if (under && (was === '.' || THROUGH.has(was) || BOWL_KEYS.has(was))) continue;
+      if (under && (THROUGH.has(was) || BOWL_KEYS.has(was))) continue;
+      if (under && was === '.' && !(i > 0 && mine[i - 1][dx])) continue;
       g[ty][x + dx] = row[dx];
+      mine[i][dx] = true;
     }
   });
+  for (const [part, x0, y0] of FRONT_PARTS.get(frame) ?? [])
+    part.forEach((row, dy) => {
+      for (let dx = 0; dx < row.length; dx++) {
+        const [px, py] = [x0 + dx, y0 + dy];
+        if (row[dx] !== '.' && px >= 0 && px < SIZE && py >= 0 && py < SIZE) g[py][px] = row[dx];
+      }
+    });
   return g.map((r) => r.join(''));
 }
 

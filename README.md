@@ -11,6 +11,7 @@
 <p align="center">
   <a href="https://forecastych.github.io/DeskPartner/">Website</a> ·
   <a href="https://github.com/Forecastych/DeskPartner/releases/latest">Download</a> ·
+  <a href="https://forecastych.itch.io/deskpartner">itch.io</a> ·
   <a href="README.ru.md">По-русски</a>
 </p>
 
@@ -26,7 +27,7 @@
 - **Talks rarely**: a speech bubble every 10 to 30 minutes, with a fact, a "this day in history" note or a headline on the topics you picked.
 - **Has a coat and a character**: grey tabby, ginger, black, tuxedo or calico. Each one sleeps, chats, plays and takes offence a little differently.
 - **Grows up**: she starts as a kitten, becomes a teen after 15 days together and a grown cat after a month. Days count only while she is on screen with you. Once she is grown, you can pick any of the three looks in Settings.
-- **Keeps you company while you focus**: pick "Focus for 25 minutes" in her menu or the tray, and she naps next to an hourglass without bothering you. When time is up, she stretches and calls you for a 5-minute break, with a laser game if you like.
+- **Keeps you company while you focus**: pick "Focus for 25 minutes" in her menu or the tray, and she naps next to an hourglass without bothering you. The "Timer" slider right in the menu sets any length from 1 minute to 3 hours, and the last one is remembered. When time is up, she stretches and calls you for a break (a fifth of the focus time), with a laser game if you like.
 - **Earns awards and outfits**: milestones like the first ten pets or ten kilometres of mouse travel unlock a bow, a bandana, a bell, a beanie and a crown. Pick what she wears in Stats.
 - **Keeps a diary**: every evening a short entry about the day in her own words, in Stats.
 - **Brings you a present** after 100 days together: a mouse, whole and clean. Accept it and it stays as a trophy, or turn it down and she takes it away, offended.
@@ -37,7 +38,7 @@ She does not show up in screenshots or screen recordings (you can change that). 
 
 ## Install
 
-1. Download `DeskPartner_<version>_x64-setup.exe` from [Releases](https://github.com/Forecastych/DeskPartner/releases/latest).
+1. Download `DeskPartner_<version>_x64-setup.exe` from [Releases](https://github.com/Forecastych/DeskPartner/releases/latest) or [itch.io](https://forecastych.itch.io/deskpartner).
 2. Run it. It installs into your user profile, no administrator rights needed.
 3. On first launch, give her a name and choose a folder for her data.
 
