@@ -86,6 +86,10 @@ html[data-phone] .gift-phone {
   flex: 1 1 230px;
 }
 
+.gift-footer small {
+  flex-basis: 100%;
+}
+
 @media (max-width: 590px) {
   .gift-body {
     grid-template-columns: minmax(0, 1fr);
