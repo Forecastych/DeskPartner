@@ -6,6 +6,7 @@ import App from './App.svelte';
 import Bowl from './Bowl.svelte';
 import Bubble from './Bubble.svelte';
 import Guide from './Guide.svelte';
+import IrisPortrait from './IrisPortrait.svelte';
 import Laser from './Laser.svelte';
 import Mouse from './Mouse.svelte';
 import PetMenu from './PetMenu.svelte';
@@ -28,6 +29,8 @@ const views: Record<string, Component> = {
   settings: Settings,
   guide: Guide,
   'whats-new': Guide,
+  'iris-portrait': IrisPortrait,
+  'iris-frame': IrisPortrait,
   stats: Stats,
   menu: PetMenu,
   bubble: Bubble,

@@ -95,6 +95,8 @@ npm run app
 
 `npm run app` запускает программу в режиме разработки. `npm run release` собирает установщик в `src-tauri/target/release/bundle/nsis/`.
 
+Команда `npm run release:installers` собирает обычный установщик для автообновления и подарочный для IRIS из одной сборки DeskPartner.
+
 Проверки:
 
 ```bash

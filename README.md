@@ -97,6 +97,8 @@ npm run app
 
 `npm run app` starts the app in development mode. `npm run release` builds the installer into `src-tauri/target/release/bundle/nsis/`.
 
+For the IRIS release, `npm run release:installers` bundles the same app into the standard updater installer and the separate IRIS gift installer.
+
 Checks:
 
 ```bash

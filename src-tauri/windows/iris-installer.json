@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/iris-hooks.nsh",
+        "headerImage": "./windows/iris-header.bmp",
+        "sidebarImage": "./windows/iris-sidebar.bmp"
+      }
+    }
+  }
+}

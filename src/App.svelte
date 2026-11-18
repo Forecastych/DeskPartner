@@ -15,6 +15,7 @@
   import * as fly from './lib/fly';
   import * as gift from './lib/gift';
   import { withMouse } from './lib/giftArt';
+  import * as irisGift from './lib/irisGift';
   import * as roam from './lib/roam';
   import * as news from './lib/news';
   import * as rel from './lib/releases';
@@ -395,6 +396,13 @@
   let lastMove = Date.now();
   let lastWorld = 0;
   let lastSave = 0;
+  let irisStatus: 'none' | 'pending' | 'opened' = 'none';
+  let irisOpening = false;
+  let irisHasPhoto = false;
+  let irisOfferPending = false;
+  let bubbleAction: 'iris' | 'laser' = 'laser';
+  let irisReveal: { started: number; frames: Frame[] } | null = null;
+  let irisRendered: Frame | null = null;
   let lastMask = '';
   let lastPlace = '';
   let timer: ReturnType<typeof setTimeout>;
@@ -1122,6 +1130,10 @@
     const was = head;
     head = crown(at, cell);
     if (speakingUntil && head && (head.x !== was?.x || head.top !== was?.top)) invoke('bubble_at', head).catch(console.error);
+    placeWindow(at);
+  }
+
+  function placeWindow(at: { x: number; bottom: number }) {
     const key = `${at.x},${at.bottom}`;
     if (key === lastPlace) return;
     lastPlace = key;
@@ -1160,6 +1172,7 @@
       !!pet &&
       !!world &&
       !!anim &&
+      !irisRendered &&
       !carried &&
       !holding &&
       !pet.hunt &&
@@ -1274,9 +1287,10 @@
    * в Rust в любом порядке, и поздний hush гасит только что показанное облачко. `act` — надпись
    * кнопки-действия под текстом (Bubble.svelte): нажали — придёт bubble-act.
    */
-  function speak(text: string, now: number, about: { topic: Topic; source: string; link?: string } | null = null, ms = chatter.shownFor(text), act: string | null = null) {
+  function speak(text: string, now: number, about: { topic: Topic; source: string; link?: string } | null = null, ms = chatter.shownFor(text), act: string | null = null, action: 'iris' | 'laser' = 'laser') {
     if (!head || bossed || gameHidden) return;
     speakingUntil = now + ms;
+    bubbleAction = action;
     voteFor = about && { topic: about.topic, source: about.source, link: about.link };
     invoke('say', { text, ...head, vote: !!about, link: !!about?.link, act }).catch(console.error);
     stats.said++;
@@ -1453,6 +1467,11 @@
     const now = Date.now();
     const dt = now - lastMove;
     lastMove = now;
+    if (renderIrisGift()) {
+      if (now - lastWorld >= WORLD_MS) void survey();
+      return;
+    }
+    if (irisRendered) render();
     if (!hunt && !game && pet && world && now >= nextHunt && (huntNow ? canHunt(now) && pet.move !== 'out' : readyToHunt(now))) {
       hunt = mouse.start(mouse.arena(world, hunterArea, shelves), now, Math.random);
       stats.mice++;
@@ -1644,9 +1663,94 @@
     if (now - lastWorld >= (perched ? PERCH_WORLD_MS : WORLD_MS)) survey();
   }
 
+  function canShowIrisGift(): boolean {
+    return loaded && pet?.move === 'still' && !!senses && !frozen && !bossed
+      && !gameHidden && !fullscreen() && unbothered() && !filming() && !away()
+      && !holding && !carried && dot === null && !onTimer() && !busy() && !hunt && !game;
+  }
+
+  /** Рисуем коробку в окне кошки. Ни фокус, ни положение и состояние самого питомца не меняются. */
+  function renderIrisGift(): boolean {
+    const pending = irisStatus === 'pending';
+    if (!pending && !irisReveal) return false;
+    const time = performance.now();
+    const frameNo = irisReveal ? Math.floor((time - irisReveal.started) / irisGift.FRAME_MS) : 0;
+    if (irisReveal && frameNo >= irisReveal.frames.length) irisReveal = null;
+    if (!world || !canShowIrisGift()) return false;
+    const next = pending ? irisGift.waitingFrame(time) : irisReveal?.frames[frameNo];
+    if (!next) return false;
+    if (irisRendered !== next) {
+      irisRendered = next;
+      head = null;
+      if (speakingUntil) hush();
+      draw(canvas.getContext('2d')!, next, { ...coat, ...irisGift.BOX_PALETTE });
+      canvas.style.cursor = pending ? 'pointer' : '';
+      uploadMask(pending ? hitMask(next) : NO_MASK, false);
+    }
+    const spot = roam.spawn(world);
+    placeWindow({ x: Math.round(spot.x), bottom: Math.round(spot.y) });
+    return true;
+  }
+
+  async function refreshIrisGift() {
+    try {
+      const status = await invoke<'pending' | 'opened' | null>('iris_gift_status');
+      if (status && irisStatus !== 'opened') irisStatus = status;
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function openIrisGift() {
+    if (irisStatus !== 'pending' || irisOpening || !canShowIrisGift()) return;
+    irisOpening = true;
+    try {
+      const opened = await invoke<boolean>('open_iris_gift');
+      irisStatus = 'opened';
+      if (opened) {
+        if (world) pet = roam.spawn(world);
+        const kit = growing.animsFor(stageNow(Date.now()), fatOn(new Date()));
+        const frames = irisGift.revealFrames({ idle: paint(kit.sit.frames[0], breed), happy: paint(kit.petted.frames[0], breed) });
+        irisReveal = { started: performance.now(), frames };
+        irisOfferPending = true;
+      }
+      render();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      irisOpening = false;
+    }
+  }
+
+  async function showIrisFrame(fromPicker = false) {
+    const hidden = parse(store.get('settings')).hideFromCapture;
+    const left = await invoke<number | null>('show_iris_frame', { hidden });
+    if (!fromPicker || left === null || !world || !pet || !canShowIrisGift()) return;
+    const monitor = roam.monitorOf(world, pet);
+    if (!monitor) return;
+    const now = Date.now();
+    pet = { ...roam.release(pet, world, left - roam.side(monitor) / 2, monitor.work.bottom), facing: 1 };
+    rest = 'sit';
+    restUntil = now + 5_000;
+    render();
+    persist(now);
+  }
+
+  function uploadMask(mask: number[], moving: boolean) {
+    const key = `${moving} ${mask.join(',')}`;
+    if (key === lastMask) return;
+    lastMask = key;
+    invoke('set_hit_mask', { rows: mask, moving }).catch(console.error);
+  }
+
   function render() {
     const now = Date.now();
     live(now);
+    if (renderIrisGift()) return;
+    if (irisRendered) {
+      irisRendered = null;
+      canvas.style.cursor = '';
+    }
     const next = choose(now);
     if (next !== anim) {
       anim = next;
@@ -1682,12 +1786,13 @@
     // В пути кошку можно подхватить только с Shift. В полноэкранном режиме клики всегда сквозные.
     const moving = !carried && !!pet && pet.move !== 'still';
     const mask = anim && !fullscreen() ? hitMask(frame) : NO_MASK;
-    const key = `${moving} ${mask.join(',')}`;
-    if (key !== lastMask) {
-      lastMask = key;
-      invoke('set_hit_mask', { rows: mask, moving }).catch(console.error);
-    }
+    uploadMask(mask, moving);
     place();
+    if (irisOfferPending && !irisReveal && head && canShowIrisGift()) {
+      irisOfferPending = false;
+      forced = true;
+      speak(t('Покажешь снимок с фотосессии?', 'Will you show me your photo?'), now, null, 22_000, t('Выбрать фото', 'Choose a photo'), 'iris');
+    }
     tellBowl();
     tellBed();
     tellLitter();
@@ -1755,10 +1860,16 @@
    * Пока ест, ЛКМ по ней ничего не делает.
    */
   async function poke(e: PointerEvent) {
-    if (gameHidden || fullscreen() || (pet && pet.move !== 'still' && !e.shiftKey)) return;
+    if (gameHidden || fullscreen()) return;
     const r = canvas.getBoundingClientRect();
     const x = Math.floor(((e.clientX - r.left) / r.width) * SIZE);
     const y = Math.floor(((e.clientY - r.top) / r.height) * SIZE);
+    if (irisRendered) {
+      const pixel = irisRendered[y]?.[x];
+      if (e.button === 0 && pixel && pixel !== '.') await openIrisGift();
+      return;
+    }
+    if (pet && pet.move !== 'still' && !e.shiftKey) return;
     if (onBowl(frame, x, y)) return bowlClick(e.button, Date.now());
     if (e.button === 2) return void showMenu();
     if (e.button !== 0 || holding) return;
@@ -1937,6 +2048,10 @@
       { id: 'hunterArea', text: t('Мышь по всему экрану', 'Mouse on the whole screen'), checked: s.hunterArea === 'screen', hint: t('иначе — по панели задач', 'otherwise along the taskbar') },
       { id: 'yarn', text: t('Клубок', 'Yarn'), checked: s.yarn, hint: t('раз в час-два катает по панели задач', 'rolls it along the taskbar every hour or two') },
       { separator: true },
+      ...(irisStatus === 'opened' ? [{
+        id: 'iris',
+        text: irisHasPhoto ? t('Портрет от IRIS…', 'Portrait from IRIS…') : t('Добавить радужку…', 'Add an iris photo…'),
+      }] : []),
       { id: 'stats', text: t('Статистика…', 'Stats…') },
       { id: 'settings', text: t('Настройки…', 'Settings…') },
     ];
@@ -1950,6 +2065,7 @@
     else if (id === 'laser') invoke('set_laser', { on: dot === null }).catch(console.error);
     else if (id === 'settings') invoke('open_settings').catch(console.error);
     else if (id === 'stats') invoke('open_stats').catch(console.error);
+    else if (id === 'iris') invoke('show_iris_portrait').catch(console.error);
     else if (id === 'update') installUpdate();
     // без тем рассказывать нечего — ведём туда, где их выбирают
     else if (id === 'news' && topics.length) newsNow();
@@ -2110,11 +2226,20 @@
 
   onMount(() => {
     let alive = true;
+    const win = getCurrentWebviewWindow();
     let moving: ReturnType<typeof setInterval> | undefined;
     // Сначала память и мир, потом первый кадр: иначе кошка мелькнёт там, где окно поставил Rust, и перепрыгнет.
     // Ставим туда, где оставили; запустили, пока она в отлучке или в обиде, — она сразу за краем.
     // Старые записи из localStorage переезжают в папку данных один раз, при первом открытии.
-    Promise.all([open(tauriBackend(invoke), localLegacy()), survey()]).then(([opened]) => {
+    const uniris = win.listen('iris-gift-ready', () => void refreshIrisGift());
+    const unirisPhoto = win.listen('iris-photo-saved', () => {
+      irisHasPhoto = true;
+      void showIrisFrame(true).catch(console.error);
+    });
+    const unirisRemoved = win.listen('iris-photo-removed', () => { irisHasPhoto = false; });
+    const unirisFrame = win.listen('iris-frame-enabled', () => void showIrisFrame().catch(console.error));
+    const irisLoaded = uniris.then(refreshIrisGift, refreshIrisGift);
+    Promise.all([open(tauriBackend(invoke), localLegacy()), survey(), irisLoaded]).then(([opened]) => {
       if (!alive) return;
       store = opened;
       const settings = parse(store.get('settings'));
@@ -2166,6 +2291,12 @@
       turnPage(Date.now());
       lastMove = Date.now();
       render();
+      if (irisStatus === 'opened') {
+        void invoke<boolean>('iris_has_photo').then((hasPhoto) => {
+          irisHasPhoto = hasPhoto;
+          if (hasPhoto) return showIrisFrame();
+        }).catch(console.error);
+      }
       timer = setTimeout(loop, anim ? ANIMS[0][anim].ms : AWAY_TICK_MS);
       moving = setInterval(move, MOVE_MS);
     });
@@ -2354,7 +2485,6 @@
     const uninstall = listen('update-install', installUpdate);
     // окно настроек уже сохранило файл; кеш обновляем, чтобы следующая галочка в меню не затёрла его старьём
     // Слушаем своим окном: глобальный listen поймал бы и наш же emitTo('settings', 'settings').
-    const win = getCurrentWebviewWindow();
     const unsettings = win.listen<Settings>('settings', (e) => {
       if (frozen) return;
       const s = parse(serialize(e.payload));
@@ -2437,12 +2567,13 @@
       invoke('news_vote', { source: about.source, up: e.payload.up }).catch(console.error);
       persist(Date.now());
     });
-    // кнопка «Лазер» в облачке «Перерыв!»: облачко уже спряталось само, указку включает Rust
+    // Кнопка действия приходит после закрытия облачка.
     const unact = win.listen('bubble-act', () => {
       speakingUntil = 0;
       forced = false;
       voteFor = null;
-      invoke('set_laser', { on: true }).catch(console.error);
+      if (bubbleAction === 'iris') invoke('show_iris_portrait').catch(console.error);
+      else invoke('set_laser', { on: true }).catch(console.error);
     });
     return () => {
       alive = false;
@@ -2452,7 +2583,7 @@
       clearInterval(id);
       const offs = [unlisten, unshake, unclick, unhello, unbedHello, unbowlDrop, unbedDrop, unbedGrab, uncall, unsay, unhungry, unhunter, unyarn, unnews, unrevenge, unupdate, uninstall];
       offs.push(unlitterHello, unlitterDrop, unlitterGrab, unscoop, unchange, unlitter, unfly, unfocus, unfocusCancel, ungrow);
-      offs.push(ungiftHello, ungiftDrop, unaccept, unremove, ungift, ungiftHide, ungiftShow);
+      offs.push(ungiftHello, ungiftDrop, unaccept, unremove, ungift, ungiftHide, ungiftShow, uniris, unirisPhoto, unirisRemoved, unirisFrame);
       for (const off of [...offs, unsettings, unfreeze, unthaw, unpick, unstats, unwear, undrag, unlaser, unlaserOff, unshoo, unvote, unact, unboss, unshot, uncrunch]) off.then((f) => f());
     };
   });

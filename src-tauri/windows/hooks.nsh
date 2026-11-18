@@ -9,6 +9,7 @@
 ; её не удаляет (только с галочкой «удалить данные»), так что удаляем её здесь.
 
 !define MUI_CUSTOMFUNCTION_GUIINIT DeskPartnerMoveOldKey
+!define MUI_BGCOLOR "FAF8F5"
 
 Function DeskPartnerMoveOldKey
   Push $0

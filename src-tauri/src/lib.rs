@@ -11,6 +11,7 @@ mod call;
 mod esc;
 mod hit;
 mod i18n;
+mod iris_gift;
 mod laser;
 mod media;
 mod menu;
@@ -46,7 +47,7 @@ const ZOOM: f64 = 4.0;
 const SPRITES: [&str; 6] = ["bed", "litter", "gift", "bowl", "mouse", "pet"];
 
 /// Кого прячет галочка «Прятать от записи экрана». Точку лазера и её эффекты laser.rs прячет всегда сам.
-const CAPTURED: [&str; 8] = ["bed", "litter", "gift", "bowl", "mouse", "pet", "menu", "bubble"];
+const CAPTURED: [&str; 9] = ["bed", "litter", "gift", "bowl", "mouse", "pet", "menu", "bubble", iris_gift::FRAME];
 
 /// Что питомец знает о человеке прямо сейчас.
 struct Senses {
@@ -489,7 +490,7 @@ fn boss(app: &AppHandle) {
 #[cfg(windows)]
 fn sprite_visibility(app: &AppHandle, hidden: bool) {
     // show() кладёт окно наверх: лужа первой, чтобы кошка вернулась поверх неё
-    for w in ["puddle"].iter().chain(SPRITES.iter()).filter_map(|l| app.get_webview_window(l)) {
+    for w in ["puddle", iris_gift::FRAME].iter().chain(SPRITES.iter()).filter_map(|l| app.get_webview_window(l)) {
         let done = if hidden { w.hide() } else { w.show() };
         if let Err(err) = done {
             eprintln!("boss {}: {err}", w.label());
@@ -665,13 +666,15 @@ pub fn run() {
         call: AtomicBool::new(false),
     });
     tauri::Builder::default()
-        // второй экземпляр просто закрывается: два одинаковых питомца — уже не питомец
-        .plugin(tauri_plugin_single_instance::init(|_, _, _| {}))
+        // Перед закрытием второго экземпляра принимаем приглашение из установщика.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| iris_gift::receive_installer(app)))
+        .plugin(tauri_plugin_deep_link::init())
         // выбор папки данных в окне первого запуска
         .plugin(tauri_plugin_dialog::init())
         // обновления из GitHub Releases (update.rs)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(Arc::new(Masks::default()))
+        .manage(iris_gift::Access::default())
         .manage(feel.clone())
         .invoke_handler(tauri::generate_handler![
             set_hit_mask,
@@ -715,6 +718,17 @@ pub fn run() {
             store::set_data_dir,
             store::load_state,
             store::save_state,
+            iris_gift::iris_gift_status,
+            iris_gift::open_iris_gift,
+            iris_gift::iris_portrait,
+            iris_gift::save_iris_portrait,
+            iris_gift::remove_iris_portrait,
+            iris_gift::iris_frame_enabled,
+            iris_gift::set_iris_frame_enabled,
+            iris_gift::iris_has_photo,
+            iris_gift::show_iris_portrait,
+            iris_gift::open_iris_studio,
+            iris_gift::show_iris_frame,
             wiki::wiki_today,
             reviews::film_reviews,
             news::news_pick,
@@ -732,6 +746,7 @@ pub fn run() {
         .setup(move |app| {
             // язык — до окон и трея: они строятся уже на нём
             i18n::init();
+            iris_gift::connect(app);
             #[cfg(windows)]
             {
                 let h = app.handle().clone();

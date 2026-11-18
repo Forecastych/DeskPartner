@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Пиксельный питомец DeskPartner и рамка для снимка в подарок после фотосессии IRIS в Самаре.">
+  <title>Подарок от IRIS и DeskPartner</title>
+  <link rel="canonical" href="https://forecastych.github.io/DeskPartner/iris/">
+  <link rel="icon" href="../img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="gift.css">
+  <script src="gift.js" defer></script>
+</head>
+<body>
+  <main class="page gift-page">
+    <section class="win ui-px" aria-labelledby="gift-title">
+      <div class="bar">IRIS × DeskPartner</div>
+      <div class="body gift-body">
+        <div class="gift-scene" aria-hidden="true">
+          <img class="px" src="gift.png" width="176" height="176" alt="">
+        </div>
+        <div class="gift-text">
+          <h1 id="gift-title">Подарок после съёмки</h1>
+          <p>Спасибо, что заглянули в IRIS! DeskPartner поселит на рабочем столе пиксельного питомца. Он откроет коробку и предложит поставить снимок вашей радужки в рамку.</p>
+          <div class="gift-windows">
+            <a class="btn primary ui-px" href="https://github.com/Forecastych/DeskPartner/releases/download/v1.2.0/DeskPartner_IRIS_1.2.0_x64.exe">Скачать подарочный установщик</a>
+            <p class="muted">Windows 10 и 11, 64 бит</p>
+            <p>DeskPartner версии 1.2.0 или новее уже установлен? <a href="deskpartner://gift/iris">Открыть подарок в приложении</a>.</p>
+          </div>
+          <div class="gift-phone">
+            <p>Перешлите эту страницу себе и откройте её на компьютере с Windows.</p>
+            <button class="btn primary ui-px" type="button" id="share" hidden>Отправить ссылку</button>
+            <label class="gift-address" for="gift-url">Ссылка на подарок</label>
+            <input id="gift-url" type="url" value="https://forecastych.github.io/DeskPartner/iris/" readonly>
+            <span class="muted" id="share-status" role="status"></span>
+          </div>
+        </div>
+      </div>
+      <div class="gift-footer">
+        <span>Снимок остаётся на вашем компьютере.</span>
+        <a href="https://irismacrostudio.ru/samara">IRIS в Самаре</a>
+        <a href="../">О DeskPartner</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

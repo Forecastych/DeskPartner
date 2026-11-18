@@ -1,7 +1,7 @@
 {
   "name": "deskpartner",
   "private": true,
-  "version": "1.1.2",
+  "version": "1.2.0",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "description": "A pixel cat that lives on your screen edges and window frames",
@@ -12,7 +12,8 @@
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "tauri": "tauri",
     "app": "tauri dev",
-    "release": "tauri build"
+    "release": "tauri build",
+    "release:installers": "node scripts/build-installers.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",

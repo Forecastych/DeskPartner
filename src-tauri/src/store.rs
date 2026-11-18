@@ -1,7 +1,7 @@
 //! Папка данных, которую человек выбрал при первом запуске, и файлы состояния в ней.
 //!
 //! Где лежит папка, помнит только `%APPDATA%\DeskPartner\location.json` = `{"dir": "..."}` —
-//! путь и больше ничего: всё остальное о питомце живёт там, куда указал человек.
+//! в самом location.json только путь: всё состояние питомца живёт там, куда указал человек.
 //! Ядро — чистые функции с явными путями (их и тестируем), команды Tauri только подставляют
 //! путь к location.json.
 //!
@@ -28,13 +28,17 @@ struct Location {
     dir: String,
 }
 
-/// `%APPDATA%\DeskPartner\location.json`; вне Windows — `~/.config/DeskPartner/location.json`.
-fn location_file() -> Result<PathBuf, String> {
+/// Служебный файл DeskPartner в профиле пользователя.
+pub(crate) fn profile_file(name: &str) -> Result<PathBuf, String> {
     #[cfg(windows)]
     let base = std::env::var_os("APPDATA").map(PathBuf::from);
     #[cfg(not(windows))]
     let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"));
-    base.map(|b| b.join(NAME).join("location.json")).ok_or_else(|| tr("не найдена папка профиля", "user profile folder not found").into())
+    base.map(|b| b.join(NAME).join(name)).ok_or_else(|| tr("не найдена папка профиля", "user profile folder not found").into())
+}
+
+fn location_file() -> Result<PathBuf, String> {
+    profile_file("location.json")
 }
 
 /// Папка из location.json. Нет файла, он битый, путь относительный или папки уже нет —
@@ -48,7 +52,7 @@ pub fn read_dir(location: &Path) -> Option<PathBuf> {
 
 /// Запись через `.tmp` и переименование: оборвись она на середине — старый файл цел.
 /// std::fs::rename на Windows заменяет существующий файл (MoveFileEx с REPLACE_EXISTING).
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
