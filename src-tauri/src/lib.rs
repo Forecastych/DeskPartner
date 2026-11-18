@@ -332,19 +332,19 @@ async fn open_guide(app: AppHandle) -> Result<(), String> {
 }
 
 fn maybe_whats_new(app: &AppHandle) {
-    const RELEASE: &str = "1.1.1";
-    let key = "whats-new";
-    if cfg!(debug_assertions) || app.package_info().version.to_string() != RELEASE {
+    const NOTES_VERSION: &str = "1.1.1";
+    let key = store::WHATS_NEW_KEY;
+    if cfg!(debug_assertions) || app.package_info().version.to_string() != "1.1.2" {
         return;
     }
-    if store::load_state(key.into()).ok().flatten().as_deref() == Some(RELEASE) {
+    if store::load_state(key.into()).ok().flatten().as_deref() == Some(NOTES_VERSION) {
         return;
     }
     if let Err(err) = guide_window(app, "whats-new", i18n::tr("DeskPartner — что нового", "DeskPartner — what's new")) {
         eprintln!("what's new: {err}");
         return;
     }
-    if let Err(err) = store::save_state(key.into(), RELEASE.into()) {
+    if let Err(err) = store::save_state(key.into(), NOTES_VERSION.into()) {
         eprintln!("what's new: {err}");
     }
 }

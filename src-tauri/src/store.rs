@@ -14,8 +14,10 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use crate::i18n::{en, tr};
 
-/// Ключи состояния фронтенда: их файлы переезжают при смене папки.
-pub const KEYS: [&str; 16] = ["belly", "sleep", "stats", "spot", "settings", "bowl", "bed", "litter", "talk", "revenge", "day", "diary", "awards", "gift", "growth", "whats-new"];
+pub const WHATS_NEW_KEY: &str = "whatsnew";
+
+/// Файлы состояния, которые переезжают при смене папки данных.
+pub const KEYS: [&str; 16] = ["belly", "sleep", "stats", "spot", "settings", "bowl", "bed", "litter", "talk", "revenge", "day", "diary", "awards", "gift", "growth", WHATS_NEW_KEY];
 
 /// Имя папки и в %APPDATA%, и в предложениях. Не identifier из tauri.conf.json:
 /// app_config_dir() дал бы `%APPDATA%\io.github.deskpartner`, а человек ищет «DeskPartner».
@@ -435,6 +437,9 @@ mod tests {
     #[test]
     fn keys_are_checked() {
         let t = Tmp::new();
+        for key in KEYS {
+            assert!(load(Some(&t.0), key).is_ok(), "{key:?}");
+        }
         for bad in ["", "Belly", "be-lly", "../x", "a/b", "белка", "abcdefghijklmnopq"] {
             assert!(load(Some(&t.0), bad).is_err(), "{bad:?}");
             assert!(save(Some(&t.0), bad, "x").is_err(), "{bad:?}");

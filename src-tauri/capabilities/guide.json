@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "guide",
+  "description": "Собственная полоса заголовка гайда и окна «Что нового»",
+  "windows": ["guide", "whats-new"],
+  "permissions": ["core:window:allow-close", "core:window:allow-start-dragging"]
+}
