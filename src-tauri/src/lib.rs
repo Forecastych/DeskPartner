@@ -5,6 +5,8 @@
 //! "stats" — окно статистики, оттуда же; только показывает цифры, которые копит питомец.
 
 mod bubble;
+#[cfg(windows)]
+mod autostart;
 mod call;
 mod esc;
 mod hit;
@@ -83,8 +85,23 @@ struct SensesNow {
 
 /// Маска текущего кадра того окна, которое её прислало.
 #[tauri::command]
-fn set_hit_mask(window: WebviewWindow, masks: State<'_, Arc<Masks>>, rows: Vec<u32>) {
-    masks.set(window.label(), rows);
+fn set_hit_mask(window: WebviewWindow, masks: State<'_, Arc<Masks>>, rows: Vec<u32>, moving: Option<bool>) {
+    masks.set(window.label(), rows, moving.unwrap_or(false));
+}
+
+#[tauri::command]
+fn set_sprite_scale(app: AppHandle, percent: u32) -> Result<(), String> {
+    let percent = match percent {
+        50 | 75 | 100 | 125 | 150 => percent,
+        _ => return Err("invalid sprite scale".into()),
+    };
+    let side = SPRITE as f64 * ZOOM * percent as f64 / 100.0;
+    for label in SPRITES {
+        if let Some(window) = app.get_webview_window(label) {
+            window.set_size(tauri::LogicalSize::new(side, side)).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 /// Прятать ли питомца и миску от записи экрана и скриншотов.
@@ -251,6 +268,7 @@ async fn finish_setup(app: AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window("setup") {
         w.close().map_err(|e| e.to_string())?;
     }
+    maybe_whats_new(&app);
     Ok(())
 }
 
@@ -289,6 +307,46 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
 #[tauri::command]
 async fn open_settings(app: AppHandle) -> Result<(), String> {
     show_settings(&app).map_err(|e| e.to_string())
+}
+
+fn guide_window(app: &AppHandle, label: &str, title: &str) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(label) {
+        return raise(&window);
+    }
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+        .title(title)
+        .inner_size(520.0, 520.0)
+        .min_inner_size(400.0, 400.0)
+        .decorations(false)
+        .shadow(true)
+        .center()
+        .focused(true)
+        .build()?;
+    raise(&window)
+}
+
+#[tauri::command]
+async fn open_guide(app: AppHandle) -> Result<(), String> {
+    guide_window(&app, "guide", i18n::tr("DeskPartner — быстрый гайд", "DeskPartner — quick guide"))
+        .map_err(|e| e.to_string())
+}
+
+fn maybe_whats_new(app: &AppHandle) {
+    const RELEASE: &str = "1.1.1";
+    let key = "whats-new";
+    if cfg!(debug_assertions) || app.package_info().version.to_string() != RELEASE {
+        return;
+    }
+    if store::load_state(key.into()).ok().flatten().as_deref() == Some(RELEASE) {
+        return;
+    }
+    if let Err(err) = guide_window(app, "whats-new", i18n::tr("DeskPartner — что нового", "DeskPartner — what's new")) {
+        eprintln!("what's new: {err}");
+        return;
+    }
+    if let Err(err) = store::save_state(key.into(), RELEASE.into()) {
+        eprintln!("what's new: {err}");
+    }
 }
 
 /// Окно статистики: тоже одно на всё приложение, открыто — поднять. Только показывает цифры,
@@ -397,20 +455,45 @@ fn unix_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
-/// «Босс идёт»: спрятать питомца, миску, лежак, лоток, подарок, мышь и лужу или вернуть их. Облачко и меню
-/// окно кошки убирает само, получив "boss"; на это время оно молчит.
+#[cfg(windows)]
+static GAME_HIDDEN: AtomicBool = AtomicBool::new(false);
+
+#[cfg(windows)]
+fn game_hidden() -> bool {
+    GAME_HIDDEN.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+fn set_game_hidden(app: AppHandle, hidden: bool) {
+    #[cfg(windows)]
+    if GAME_HIDDEN.swap(hidden, Ordering::Relaxed) != hidden {
+        sprite_visibility(&app, hidden || win::bossed());
+        if hidden {
+            laser::set_laser(false);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (app, hidden);
+}
+
+/// «Босс идёт» и полноэкранная игра управляют одними и теми же окнами.
 #[cfg(windows)]
 fn boss(app: &AppHandle) {
     let hidden = win::toggle_boss();
+    sprite_visibility(app, hidden || game_hidden());
+    if let Err(err) = app.emit_to("pet", "boss", hidden) {
+        eprintln!("boss: {err}");
+    }
+}
+
+#[cfg(windows)]
+fn sprite_visibility(app: &AppHandle, hidden: bool) {
     // show() кладёт окно наверх: лужа первой, чтобы кошка вернулась поверх неё
     for w in ["puddle"].iter().chain(SPRITES.iter()).filter_map(|l| app.get_webview_window(l)) {
         let done = if hidden { w.hide() } else { w.show() };
         if let Err(err) = done {
             eprintln!("boss {}: {err}", w.label());
         }
-    }
-    if let Err(err) = app.emit_to("pet", "boss", hidden) {
-        eprintln!("boss: {err}");
     }
 }
 
@@ -592,9 +675,16 @@ pub fn run() {
         .manage(feel.clone())
         .invoke_handler(tauri::generate_handler![
             set_hit_mask,
+            set_sprite_scale,
+            set_game_hidden,
             set_capture_hidden,
             finish_setup,
             open_settings,
+            open_guide,
+            #[cfg(windows)]
+            autostart::is_autostart,
+            #[cfg(windows)]
+            autostart::set_autostart,
             open_stats,
             move_data_dir,
             relaunch,
@@ -628,6 +718,7 @@ pub fn run() {
             wiki::wiki_today,
             reviews::film_reviews,
             news::news_pick,
+            news::news_shown,
             news::news_topics,
             news::news_vote,
             news::news_status,
@@ -664,6 +755,7 @@ pub fn run() {
                 if reopen {
                     show_settings(app.handle())?;
                 }
+                maybe_whats_new(app.handle());
             } else {
                 build_setup_window(app.handle())?;
             }

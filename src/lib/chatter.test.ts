@@ -404,12 +404,28 @@ describe('helpers', () => {
 
 describe('save and load', () => {
   it('keeps shoos and what was said today', () => {
-    const t: Talk = { ...fresh(0, 'sometimes', mid), shooed: 2, last: 'Мур.', daily: { morning: '2026-11-07' } };
+    const t: Talk = { ...fresh(SAT.getTime(), 'sometimes', mid), shooed: 2, last: 'Мур.', daily: { morning: '2026-11-07' } };
     const back = load(save(t), SAT.getTime(), 'sometimes', mid);
     expect(back.shooed).toBe(2);
     expect(back.last).toBe('Мур.');
     expect(back.daily).toEqual({ morning: '2026-11-07' });
-    expect(back.next).toBe(SAT.getTime() + interval('sometimes', 2, mid));
+    expect(back.next).toBe(t.next);
+  });
+
+  it('keeps an overdue conversation eligible and supports saves without a deadline', () => {
+    const now = SAT.getTime();
+    expect(load('{"next":1}', now, 'sometimes', mid).next).toBe(now);
+    expect(load('{}', now, 'sometimes', mid).next).toBe(now + interval('sometimes', 0, mid));
+    expect(load('{"next":1}', now, 'quiet', mid).next).toBe(Infinity);
+  });
+
+  it('uses a selected news topic in a regular bubble before the facts timer', () => {
+    const m = moment(SAT, { topics: ['наука'], news: { topic: 'наука', text: 'Новости науки' } });
+    const [next, line] = say(due(SAT), m, 'sometimes', mid);
+    expect(line).toEqual({ key: 'news:наука', text: 'Новости науки' });
+    expect(next.told).toContain('Новости науки');
+    expect(next.topic).toBe('наука');
+    expect(say(due(SAT), m, 'quiet', mid)[1]).toBeNull();
   });
 
   it('survives garbage', () => {

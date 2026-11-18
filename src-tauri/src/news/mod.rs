@@ -213,13 +213,13 @@ fn set_topics(cache: &mut Cache, topics: &[String], now: i64) -> bool {
 
 /// Новость для облачка. Тема — случайная по весам `topic_w` (их ведёт chatter) из тех, где
 /// есть непоказанное; источник — случайный по голосам; от источника — его самая свежая.
-/// Выбранная запоминается как показанная.
-fn pick(cache: &mut Cache, now: i64, seed: u64, topic_w: &BTreeMap<String, f64>) -> Option<NewsItem> {
+fn select(cache: &Cache, allowed: &[String], now: i64, seed: u64, topic_w: &BTreeMap<String, f64>) -> Option<NewsItem> {
     let mut rng = seed;
-    let fresh = |i: &&NewsItem| !cache.shown.contains_key(&i.link);
+    let fresh = |i: &&NewsItem| i.date >= now - MAX_AGE && !cache.shown.contains_key(&i.link);
     let topics: Vec<(&String, f64)> = cache
         .topics
         .iter()
+        .filter(|t| allowed.contains(t))
         .filter(|t| cache.items.iter().filter(fresh).any(|i| &i.topic == *t))
         .map(|t| (t, weight(topic_w, t)))
         .collect();
@@ -232,7 +232,12 @@ fn pick(cache: &mut Cache, now: i64, seed: u64, topic_w: &BTreeMap<String, f64>)
         }
     }
     let sources: Vec<(&NewsItem, f64)> = best.values().map(|i| (*i, weight(&cache.sources, &i.source))).collect();
-    let item = draw(&sources, &mut rng)?.clone();
+    draw(&sources, &mut rng).cloned()
+}
+
+#[cfg(test)]
+fn pick(cache: &mut Cache, now: i64, seed: u64, topic_w: &BTreeMap<String, f64>) -> Option<NewsItem> {
+    let item = select(cache, &cache.topics, now, seed, topic_w)?;
     cache.shown.insert(item.link.clone(), now);
     Some(item)
 }
@@ -414,23 +419,22 @@ fn topics_changed(c: &mut Cache, topics: &[String], t: i64) -> bool {
 }
 
 /// Новость для облачка по увлечениям пользователя или `None`, если рассказать нечего.
-/// Темы запоминаются локально: по ним фоновый поток решает, какие ленты качать.
+/// Переданный список сужает выбор до тем, уместных сейчас. Подписками управляет news_topics.
 /// `weights` — веса тем из chatter: «больше такого» по теме.
 #[tauri::command]
 pub fn news_pick(topics: Vec<String>, weights: Option<BTreeMap<String, f64>>) -> Option<NewsItem> {
-    let (item, changed) = with_cache(|c| {
-        let t = now();
-        let changed = topics_changed(c, &topics, t);
-        let item = pick(c, t, seed(), &weights.unwrap_or_default());
-        if item.is_some() {
+    with_cache(|c| select(c, &topics, now(), seed(), &weights.unwrap_or_default()))
+}
+
+/// Отмечаем только то, что дошло до облачка, а не то, что взяли заранее.
+#[tauri::command]
+pub fn news_shown(link: String) {
+    with_cache(|c| {
+        if c.items.iter().any(|item| item.link == link) && !c.shown.contains_key(&link) {
+            c.shown.insert(link, now());
             save(c);
         }
-        (item, changed)
     });
-    if changed {
-        wake();
-    }
-    item
 }
 
 /// Темы поменялись в настройках — качать новые ленты сразу, не дожидаясь облачка.
@@ -576,6 +580,19 @@ mod tests {
         let order: Vec<String> = (0..2).map(|s| pick(&mut c, NOW, s, &none).unwrap().link).collect();
         assert_eq!(order, ["https://a/ru-new", "https://a/ru-old"]);
         assert_eq!(pick(&mut c, NOW, 0, &none), None, "всё показано — молчим");
+    }
+
+    #[test]
+    fn work_topics_filter_does_not_unsubscribe_leisure_or_mark_the_news_shown() {
+        let mut c = cache(&["наука", "аниме"]);
+        let science = item("наука", "ru", "https://a/science", NOW);
+        let anime = item("аниме", "ru", "https://a/anime", NOW);
+        c.items = vec![science.clone(), anime.clone()];
+        let work = ["наука".to_string()];
+        assert_eq!(select(&c, &work, NOW, 0, &BTreeMap::new()), Some(science));
+        assert_eq!(c.topics, ["наука", "аниме"]);
+        assert!(c.shown.is_empty());
+        assert_eq!(select(&c, &["аниме".into()], NOW, 0, &BTreeMap::new()), Some(anime));
     }
 
     #[test]

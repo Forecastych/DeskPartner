@@ -137,6 +137,7 @@ export interface Settings {
   chatter: Chatter;
   /** «Заходить в окно игры». */
   gameWindow: boolean;
+  spriteScale: number;
   /** «Узнавать сайты в браузере»: заголовок сверяется со списком и сразу забывается. */
   sites: boolean;
   /** «Подтягивать отзывы о фильмах»: без ключа — Wikidata и Википедия (src/lib/reviews.ts), с ключом — ещё TMDB. */
@@ -183,6 +184,7 @@ export function defaults(): Settings {
     mode: 'calm',
     chatter: 'sometimes',
     gameWindow: false,
+    spriteScale: 100,
     sites: false,
     reviews: false,
     tmdbKey: '',
@@ -230,6 +232,7 @@ export function parse(raw: string | null): Settings {
     mode: oneOf(MODES, s.mode, d.mode),
     chatter: oneOf(CHATTER, s.chatter, d.chatter),
     gameWindow: bool(s.gameWindow, d.gameWindow),
+    spriteScale: typeof s.spriteScale === 'number' && [50, 75, 100, 125, 150].includes(s.spriteScale) ? s.spriteScale : d.spriteScale,
     sites: bool(s.sites, d.sites),
     reviews: bool(s.reviews, d.reviews),
     tmdbKey: typeof s.tmdbKey === 'string' ? s.tmdbKey.trim() : d.tmdbKey,

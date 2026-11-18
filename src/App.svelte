@@ -101,7 +101,7 @@
   /** Новостей нет (лента ещё не скачана, нет сети) — спросить снова через столько. */
   const NEWS_RETRY_MS = 10 * 60_000;
   /** Новость старше — уже не новость: отложенную до вечера выбрасываем и берём свежую. */
-  const NEWS_STALE_S = 2 * 24 * 3600;
+  const NEWS_STALE_S = 3 * 24 * 3600;
   /** Пока кошки нет на экране, проверять, не вернулась ли, раз в секунду. */
   const AWAY_TICK_MS = 1000;
   /** С лежаком засыпать уходит в него чаще, чем куда-то ещё. */
@@ -126,7 +126,7 @@
     /** Только в Windows: почему сейчас лучше не мешать; 'no' — можно. */
     quiet?: string;
     /** Только в Windows: идёт ли видео (media.rs). */
-    media?: { watching: boolean; title: string; loud: boolean };
+    media?: { watching: boolean; title: string; loud: boolean; foreground_media?: boolean };
     /** Программа в активном окне (имя, не заголовок): месть выбирает, мстить ли в её окно. */
     app?: string | null;
     /** Только в Windows: идёт созвон — занят микрофон или камера, или Zoom показывает экран. Месть тоже молчит. */
@@ -226,7 +226,8 @@
    * берём по одной, а не пачкой. Идёт первой среди фактов своей темы.
    * С `link` — это не новость, а вышедшее у своего (lib/releases.ts): патч игры или серия.
    */
-  let held: { topic: Topic; text: string; date: number; source: string; link?: string } | null = null;
+  type HeldNews = { topic: Topic; text: string; date: number; source: string; link?: string; rssLink?: string };
+  let held: HeldNews | null = null;
   /** На облачке сейчас новость — под ней лайк/диз; голос пойдёт ей. С `link` — «Глянем» откроет ссылку. */
   let voteFor: { topic: Topic; source: string; link?: string } | null = null;
   /** Включены «Новости любимых игр» или «Новые серии аниме». */
@@ -289,6 +290,39 @@
   let flyCheck = Date.now();
   /** «Босс идёт» (Ctrl+Alt+H или трей): окна спрятаны Rust'ом, кошка молчит и не затевает игр. */
   let bossed = false;
+  let gameWindow = false;
+  let gameHidden = false;
+  let spriteScale = 100;
+
+  const fullscreen = () => !!world?.activeFullscreen || senses?.quiet === 'exclusive_fullscreen'
+    || (senses?.quiet === 'fullscreen' && !!senses.game);
+
+  function syncGameVisibility() {
+    const hidden = senses?.quiet === 'exclusive_fullscreen'
+      || (fullscreen() && !gameWindow && (!!senses?.game || !senses?.media?.foreground_media));
+    if (hidden === gameHidden) return;
+    gameHidden = hidden;
+    invoke('set_game_hidden', { hidden }).catch(console.error);
+    if (hidden) {
+      if (speakingUntil) hush();
+      invoke('close_menu').catch(console.error);
+    }
+    if (loaded) render();
+  }
+
+  function applyScale(percent: number) {
+    if (percent === spriteScale) return;
+    spriteScale = percent;
+    invoke('set_sprite_scale', { percent }).then(() => {
+      if (percent !== spriteScale) return;
+      lastPlace = '';
+      if (world) {
+        for (const m of world.monitors) m.spriteScale = spriteScale / 100;
+        resettle();
+      }
+      if (loaded) render();
+    }).catch(console.error);
+  }
   /** Когда заблокировали экран (Win+L); 0 — не заблокирован. */
   let lockedAt = 0;
   /** До этих пор простой после разблокировки не считается «отошёл». */
@@ -942,7 +976,7 @@
   /** Мешать человеку можно вообще: лужа и начатая месть живут, только пока так. */
   const unbothered = (): boolean => revenge.allowed({ mode: 'pranks', quiet: quietNow(), call: senses?.call });
   /** Почему не мешать: спрятанная от босса кошка тоже не мешает. */
-  const quietNow = (): string | undefined => (bossed ? 'boss' : senses?.quiet);
+  const quietNow = (): string | undefined => (bossed ? 'boss' : fullscreen() ? 'fullscreen' : senses?.quiet);
 
   /** Пустить мышь: кошка стоит без дела — не голодна, не умывается, не идёт спать в лежак. */
   function readyToHunt(now: number): boolean {
@@ -999,6 +1033,7 @@
 
   /** Поза на сейчас; null — кошки на экране нет. */
   function choose(now: number): AnimName | null {
+    if (gameHidden) return null;
     if (carried) return 'carried';
     if (pet?.hunt) {
       if (now < bonkUntil || pet.hunt.mode === 'bonk') return 'bonk';
@@ -1140,23 +1175,30 @@
   /** Облачко: убрать, когда пора или кошке стало не до него; сказать новое, когда chatter решит. */
   function chat(now: number) {
     if (speakingUntil) {
-      if (now >= speakingUntil || (!free() && !forced)) hush();
+      if (now >= speakingUntil || (!forced && dialogueInterrupted())) hush();
       return;
     }
     // на таймере и до облачка «Перерыв!» молчит: и болтовня, и «есть хочу» ждут перерыва
     if (focus && !focus.offered) return;
     // своя реплика у мухи — chatter не перебивает
-    if (frozen || !senses || !head || film.active || flyAt) return;
+    if (!senses || dialogueInterrupted() || flyAt) return;
     askWiki(now);
     askNews(now);
     const [next, line] = chatter.say(talk, moment(now, senses), chatterLevel, Math.random, trait().talky);
     talk = next;
-    if (line) speak(line.text, now, held && line.text === held.text ? held : null);
+    if (line?.key.startsWith('news:') && held) {
+      const item = held;
+      held = null;
+      showNews(item, now);
+    } else if (line) speak(line.text, now);
+  }
+
+  function dialogueInterrupted(): boolean {
+    return frozen || bossed || gameHidden || fullscreen() || !head || away() || film.active;
   }
 
   function moment(now: number, s: Senses): chatter.Moment {
-    // вышедшее у своего — не посреди игры: подождёт паузы. Тему держит не список тем, а галочка
-    const tell = held && !(held.link && s.game) ? held : null;
+    const tell = held && canTellNews(held, now) ? held : null;
     return {
       now: new Date(now),
       pause: !s.idle && !s.typing && (s.quiet ?? 'no') === 'no',
@@ -1166,7 +1208,8 @@
       free: free(),
       topics: tell?.link && !topics.includes(tell.topic) ? [...topics, tell.topic] : topics,
       name: petName,
-      extra: tell ? { ...wikiFacts, [tell.topic]: [tell.text, ...(wikiFacts[tell.topic] ?? [])] } : wikiFacts,
+      news: tell ?? undefined,
+      extra: wikiFacts,
     };
   }
 
@@ -1176,8 +1219,7 @@
    * На отдыхе и не в игре сначала спрашиваем, не вышло ли что у своего: патч игры, серия аниме.
    */
   function askNews(now: number) {
-    const fresh = held && (!!held.link || topics.includes(held.topic)) && !talk.told.includes(held.text) && now / 1000 - held.date < NEWS_STALE_S;
-    if (fresh) return;
+    if (held && canTellNews(held, now)) return;
     held = null;
     const work = chatter.isWork(new Date(now));
     const allowed = topics.filter((t) => !work || chatter.WORK_TOPICS.includes(t));
@@ -1192,9 +1234,22 @@
       if (!allowed.length) return;
       news.pickNews(invoke, allowed, talk.weights).then((item) => {
         const topic = TOPICS.find((t) => t === item?.topic);
-        if (item && topic) held = { topic, text: news.newsLine(item), date: item.date, source: item.source };
+        if (item && topic && topics.includes(topic)) held = { topic, text: news.newsLine(item), date: item.date, source: item.source, rssLink: item.link };
       });
     });
+  }
+
+  function canTellNews(item: HeldNews, now: number): boolean {
+    const work = chatter.isWork(new Date(now));
+    const allowed = item.link ? releasesOn && !work && !senses?.game
+      : topics.includes(item.topic) && (!work || chatter.WORK_TOPICS.includes(item.topic));
+    return allowed && !talk.told.includes(item.text) && now / 1000 - item.date < NEWS_STALE_S;
+  }
+
+  function showNews(item: HeldNews, now: number) {
+    if (!head || bossed || gameHidden) return;
+    speak(item.text, now, item, Math.max(6500, chatter.shownFor(item.text)));
+    if (item.rssLink) invoke('news_shown', { link: item.rssLink }).catch(console.error);
   }
 
   /**
@@ -1220,7 +1275,7 @@
    * кнопки-действия под текстом (Bubble.svelte): нажали — придёт bubble-act.
    */
   function speak(text: string, now: number, about: { topic: Topic; source: string; link?: string } | null = null, ms = chatter.shownFor(text), act: string | null = null) {
-    if (!head || bossed) return;
+    if (!head || bossed || gameHidden) return;
     speakingUntil = now + ms;
     voteFor = about && { topic: about.topic, source: about.source, link: about.link };
     invoke('say', { text, ...head, vote: !!about, link: !!about?.link, act }).catch(console.error);
@@ -1249,7 +1304,7 @@
    * чтобы было видно, что пункт сработал.
    */
   function newsNow() {
-    if (frozen || !head || away()) return;
+    if (frozen || !head || away() || gameHidden || fullscreen()) return;
     const show = (text: string, about: { topic: Topic; source: string; link?: string } | null = null) => {
       forced = true;
       // после облачка — обычная тишина GAP_MS, чтобы следом не заговорила сама
@@ -1260,8 +1315,12 @@
       if (!topics.length) return show(t('Тем не выбрано — новостей не будет.', 'No topics chosen, so no news.'));
       news.pickNews(invoke, topics, talk.weights).then((item) => {
         const topic = TOPICS.find((t) => t === item?.topic);
-        if (!item || !topic) return show(t('Новостей пока нет: ленты ещё качаются.', 'No news yet: the feeds are still downloading.'));
-        show(news.newsLine(item), { topic, source: item.source });
+        if (!item || !topic) return show(t('Свежих новостей пока нет. Состояние лент можно посмотреть в настройках.', 'No fresh news yet. You can check the feeds in Settings.'));
+        if (held?.rssLink === item.link) held = null;
+        forced = true;
+        const now = Date.now();
+        talk = { ...talk, spoke: now };
+        showNews({ topic, text: news.newsLine(item), source: item.source, date: item.date, rssLink: item.link }, now);
       });
     };
     // патчи и серии — только на отдыхе; в игре Rust ответит null сам
@@ -1366,7 +1425,9 @@
     lastWorld = Date.now();
     try {
       const w = await invoke<roam.World>('world');
+      for (const m of w.monitors) m.spriteScale = spriteScale / 100;
       world = w.monitors.length ? w : null;
+      syncGameVisibility();
       const k = world ? roam.looked(world) : -1;
       if (k >= 0) seen[roam.monitorKey(world!.monitors[k])] = lastWorld;
       // полки внутри окон нужны только мыши на весь экран
@@ -1618,19 +1679,20 @@
       canvas.getContext('2d')!.clearRect(0, 0, SIZE, SIZE);
     }
     // Rust пропускает клики сквозь всё, что не нарисовано, — сообщаем ему форму кадра, если она сменилась.
-    // Кошку в пути не поймать: пока идёт, прыгает или падает, клики проходят насквозь.
-    const mask = anim && (carried || !pet || pet.move === 'still') ? hitMask(frame) : NO_MASK;
-    const key = mask.join(',');
+    // В пути кошку можно подхватить только с Shift. В полноэкранном режиме клики всегда сквозные.
+    const moving = !carried && !!pet && pet.move !== 'still';
+    const mask = anim && !fullscreen() ? hitMask(frame) : NO_MASK;
+    const key = `${moving} ${mask.join(',')}`;
     if (key !== lastMask) {
       lastMask = key;
-      invoke('set_hit_mask', { rows: mask }).catch(console.error);
+      invoke('set_hit_mask', { rows: mask, moving }).catch(console.error);
     }
     place();
     tellBowl();
     tellBed();
     tellLitter();
     tellGift();
-    if (speakingUntil && !free() && !forced) hush();
+    if (speakingUntil && !forced && dialogueInterrupted()) hush();
   }
 
   /** У каждой анимации свой темп, поэтому таймер заводится заново на каждый кадр. */
@@ -1693,6 +1755,7 @@
    * Пока ест, ЛКМ по ней ничего не делает.
    */
   async function poke(e: PointerEvent) {
+    if (gameHidden || fullscreen() || (pet && pet.move !== 'still' && !e.shiftKey)) return;
     const r = canvas.getBoundingClientRect();
     const x = Math.floor(((e.clientX - r.left) / r.width) * SIZE);
     const y = Math.floor(((e.clientY - r.top) / r.height) * SIZE);
@@ -1773,6 +1836,9 @@
     petName = s.name;
     reviewsOn = s.reviews;
     form = s.form;
+    gameWindow = s.gameWindow;
+    syncGameVisibility();
+    applyScale(s.spriteScale);
     tellUpdates(s.updates);
     // ленты новых тем качаются сразу, а не когда кошка соберётся рассказать
     invoke('news_topics', { topics: [...topics] }).catch(console.error);
@@ -1836,6 +1902,7 @@
 
   /** ПКМ по кошке — своё меню (menu.rs): фокус у человека не забирает, выбор приходит событием menu-pick. */
   function showMenu() {
+    if (gameHidden || fullscreen()) return;
     const s = parse(store.get('settings'));
     const known = tally.days(stats.since, Date.now());
     const items = [
@@ -1969,6 +2036,7 @@
         lastInput = senses.input;
       }
       watch(Date.now(), senses);
+      syncGameVisibility();
       const locked = senses.quiet === 'away';
       if (locked && !lockedAt) lockedAt = Date.now();
       if (!locked && lockedAt) unlocked(Date.now());
@@ -2057,6 +2125,7 @@
       chatterLevel = settings.chatter;
       setBreed(settings.breed);
       topics = settings.topics;
+      invoke('news_topics', { topics: [...topics] }).catch(console.error);
       reviewsOn = settings.reviews;
       tellUpdates(settings.updates);
       hunterOn = settings.hunter;
@@ -2065,6 +2134,9 @@
       yarnOn = settings.yarn;
       nextYarn = Date.now() + yarnGap();
       mode = settings.mode;
+      gameWindow = settings.gameWindow;
+      applyScale(settings.spriteScale);
+      syncGameVisibility();
       // имя — репликам и трею; иначе после перезапуска кошка безымянная, пока не тронешь настройки
       petName = settings.name;
       if (petName) invoke('name_pet', { name: petName }).catch(console.error);

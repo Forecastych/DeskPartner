@@ -44,6 +44,8 @@ She does not show up in screenshots or screen recordings (you can change that). 
 
 Works on Windows 10 and 11.
 
+To start DeskPartner when you sign in, turn on **Settings → Startup and help → Start when I sign in to Windows**.
+
 > [!WARNING]
 > **Windows SmartScreen will warn you about the installer.** The installer is not code-signed: a code signing certificate costs money every year, and this is a free hobby project. To install anyway, click **More info → Run anyway**. If you would rather not trust a binary, [build it from source](#build-from-source), it takes a few commands.
 
@@ -58,9 +60,12 @@ To uninstall, use "Installed apps" in Windows Settings. Your data folder stays w
 | Menu | Right-click the cat, or the tray icon |
 | Laser pointer | Hold `Ctrl` alone, or pick it in the menu (`Esc` turns it off) |
 | Click through the cat | Hold `Alt` while clicking |
+| Pick up the cat while she moves | Hold `Shift`, then drag with the left mouse button |
 | Hide / show | `Ctrl+Alt+H` |
 | She wandered off | Tray → "Call your pet" |
 | Settings and stats | Tray → "Settings…" / "Stats…" |
+
+Change the size of the pet and her items or open the quick guide from Settings. The cat hides in fullscreen games. You can let her stay in borderless fullscreen games with the switch in Settings.
 
 ## Privacy
 

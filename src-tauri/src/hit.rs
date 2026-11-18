@@ -22,24 +22,27 @@ const POLL: Duration = Duration::from_millis(33);
 /// Формы текущих кадров по меткам окон: по строке на ряд спрайта, бит x — в клетке нарисован
 /// пиксель. Пока окно маску не прислало, оно целиком пропускает мышь.
 #[derive(Default)]
-pub struct Masks(Mutex<HashMap<String, Vec<u32>>>);
+pub struct Masks(Mutex<HashMap<String, (Vec<u32>, bool)>>);
 
 impl Masks {
-    pub fn set(&self, label: &str, rows: Vec<u32>) {
-        self.0.lock().unwrap().insert(label.to_owned(), rows);
+    pub fn set(&self, label: &str, rows: Vec<u32>, moving: bool) {
+        self.0.lock().unwrap().insert(label.to_owned(), (rows, moving));
     }
 
     /// Маска текущего кадра окна; нет — окно её ещё не прислало.
     pub fn rows(&self, label: &str) -> Option<Vec<u32>> {
-        self.0.lock().unwrap().get(label).cloned()
+        self.0.lock().unwrap().get(label).map(|(rows, _)| rows.clone())
     }
 
-    fn contains(&self, label: &str, x: i64, y: i64) -> bool {
+    fn contains(&self, label: &str, x: i64, y: i64, shift: bool) -> bool {
         if x < 0 || y < 0 || x >= SPRITE as i64 {
             return false;
         }
         let masks = self.0.lock().unwrap();
-        masks.get(label).and_then(|m| m.get(y as usize)).is_some_and(|row| row >> x & 1 == 1)
+        masks.get(label)
+            .filter(|(_, moving)| !moving || shift)
+            .and_then(|(rows, _)| rows.get(y as usize))
+            .is_some_and(|row| row >> x & 1 == 1)
     }
 }
 
@@ -83,7 +86,7 @@ pub fn spawn(window: WebviewWindow, masks: Arc<Masks>) {
             if !ignoring && held {
                 continue;
             }
-            let want = !masks.contains(&label, x, y) || alt;
+            let want = alt || !masks.contains(&label, x, y, input::shift_down());
             if want != ignoring && window.set_ignore_cursor_events(want).is_ok() {
                 ignoring = want;
             }
@@ -151,7 +154,7 @@ fn drag(window: &WebviewWindow, grab: Option<(f64, f64)>) -> Result<Option<Dropp
 #[cfg(windows)]
 mod input {
     use windows_sys::Win32::Foundation::POINT;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MENU};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MENU, VK_SHIFT};
     use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
     /// Курсор в физических пикселях рабочего стола — в тех же, что и позиция окна.
@@ -168,6 +171,10 @@ mod input {
         down(VK_MENU)
     }
 
+    pub fn shift_down() -> bool {
+        down(VK_SHIFT)
+    }
+
     pub fn left_button_down() -> bool {
         down(VK_LBUTTON)
     }
@@ -179,6 +186,10 @@ mod input {
         None
     }
     pub fn alt_down() -> bool {
+        false
+    }
+
+    pub fn shift_down() -> bool {
         false
     }
     pub fn left_button_down() -> bool {

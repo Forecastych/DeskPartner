@@ -95,6 +95,8 @@ export interface Moment {
   free: boolean;
   /** Темы из настроек; пусто — фактов нет. */
   topics: readonly Topic[];
+  /** Готовая новость на выбранную тему, если она уместна сейчас. */
+  news?: { topic: Topic; text: string };
   /** Свежие факты дня по темам (из сети); их — раньше встроенных. */
   extra?: Partial<Record<Topic, readonly string[]>>;
   /** Имя питомца; пусто — реплики с {name} не звучат. */
@@ -301,6 +303,9 @@ export function say(talk: Talk, m: Moment, level: Chatter, rand: () => number, t
     else if (m.session >= PRAISE_SECS && isWork(m.now) && once('praise')) line = { key: 'praise', text: l.praise };
     else if (now >= t.next) {
       line = daily(t, m.now);
+      if (!line && m.news && m.topics.includes(m.news.topic) && !t.told.includes(m.news.text)) {
+        line = { key: `news:${m.news.topic}`, text: m.news.text };
+      }
       const f = line ? null : fact(t, m, rand);
       if (f) [line, told] = f;
       if (!line && m.today >= 3600 && rand() < 0.2) line = { key: 'today', text: l.today };
@@ -309,9 +314,11 @@ export function say(talk: Talk, m: Moment, level: Chatter, rand: () => number, t
   }
   if (!line) return [t, null];
 
-  const text = fill(line.text, m);
+  const isNews = line.key.startsWith('news:');
+  const text = isNews ? line.text : fill(line.text, m);
   t = { ...t, spoke: now, last: line.text, next: now + interval(level, t.shooed, rand, talky), topic: '' };
   if (told) t = { ...t, told, factIn: factGap(rand), topic: line.key.slice('fact:'.length) };
+  if (isNews) t = { ...t, told: [...t.told, text].slice(-TOLD_MAX), topic: line.key.slice('news:'.length) };
   if (line.key === 'hungry') t.hungryAt = now;
   if (line.key === 'care' || line.key === 'praise') t.inSession = [...t.inSession, line.key];
   if (line.key === 'morning' || line.key === 'night' || line.key === 'friday') t.daily = { ...t.daily, [line.key]: dayKey(m.now) };
@@ -360,7 +367,7 @@ export function retime(t: Talk, level: Chatter, now: number, rand: () => number,
  * срок факта, сказанные факты и веса тем.
  */
 export function save(t: Talk): string {
-  return JSON.stringify({ shooed: t.shooed, last: t.last, daily: t.daily, factIn: t.factIn, told: t.told, weights: t.weights });
+  return JSON.stringify({ next: t.next, shooed: t.shooed, last: t.last, daily: t.daily, factIn: t.factIn, told: t.told, weights: t.weights });
 }
 
 /** Старые сохранения — без полей фактов: тогда срок факта новый, сказанного нет, веса ровные. */
@@ -377,6 +384,7 @@ export function load(raw: string | null, now: number, level: Chatter, rand: () =
     const weights: Record<string, number> = {};
     for (const [k, v] of Object.entries(s.weights ?? {}))
       if (typeof v === 'number' && Number.isFinite(v)) weights[k] = Math.min(Math.max(v, WEIGHT_MIN), WEIGHT_MAX);
+    const next = now + interval(level, shooed, rand, talky);
     return {
       ...t,
       shooed,
@@ -385,7 +393,9 @@ export function load(raw: string | null, now: number, level: Chatter, rand: () =
       factIn,
       told,
       weights,
-      next: now + interval(level, shooed, rand, talky),
+      next: level !== 'quiet' && typeof s.next === 'number' && Number.isFinite(s.next)
+        ? Math.max(now, Math.min(s.next, now + 24 * 60 * MIN))
+        : next,
     };
   } catch {
     return t;

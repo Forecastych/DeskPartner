@@ -62,6 +62,8 @@ pub struct World {
     /// Корневое окно, в котором работает человек; нет, если это рабочий стол, панель задач
     /// или окно, которого нет среди помех (своё, свёрнутое, спрятанное).
     pub active: Option<i64>,
+    /// Обычное окно в фокусе занимает весь свой монитор.
+    pub active_fullscreen: bool,
     /// Полосы заголовков развёрнутых окон левее кнопок «свернуть/развернуть/закрыть»,
     /// по z-order сверху вниз; у каждого окна не больше одной.
     pub strips: Vec<Ledge>,
@@ -79,6 +81,12 @@ pub struct Win {
     pub perch: bool,
     /// У развёрнутого обычного окна — левый край кнопок заголовка: до него тянется полоса.
     pub strip: Option<i32>,
+}
+
+impl Win {
+    fn ordinary(&self) -> bool {
+        self.perch || self.strip.is_some()
+    }
 }
 
 /// Открытые куски кромок: у каждого насеста строка `frame.top` минус всё, что закрывают окна выше.
@@ -189,9 +197,8 @@ pub fn fullscreen(monitors: Vec<Monitor>, windows: &[Win]) -> Vec<Monitor> {
             };
             let full = windows
                 .iter()
-                .map(|x| x.frame)
-                .find(|&f| in_band(f))
-                .is_some_and(|f| covers(f, r));
+                .find(|x| in_band(x.frame))
+                .is_some_and(|x| x.ordinary() && covers(x.frame, r));
             if full {
                 Monitor { work: r, ..m }
             } else {
@@ -220,7 +227,7 @@ pub fn covering() -> Vec<i64> {
     let monitors = sys::monitors();
     sys::windows()
         .into_iter()
-        .filter(|w| (w.perch || w.strip.is_some()) && monitors.iter().any(|m| covers(w.frame, m.rect)))
+        .filter(|w| w.ordinary() && monitors.iter().any(|m| covers(w.frame, m.rect)))
         .map(|w| w.hwnd)
         .collect()
 }
@@ -230,10 +237,18 @@ pub fn covering() -> Vec<i64> {
 #[tauri::command]
 pub fn world() -> World {
     let windows = sys::windows();
-    // активное считаем, только если оно среди помех: так отсеиваются свои, свёрнутые и спрятанные
-    let active = sys::active().filter(|&h| windows.iter().any(|w| w.hwnd == h));
-    let monitors = fullscreen(sys::monitors(), &windows);
-    World { monitors, ledges: ledges(&windows), active, strips: strips(&windows), cursor: sys::cursor() }
+    let active = sys::active().and_then(|h| windows.iter().find(|w| w.hwnd == h));
+    let monitors = sys::monitors();
+    let active_fullscreen =
+        active.is_some_and(|w| w.ordinary() && monitors.iter().any(|m| covers(w.frame, m.rect)));
+    World {
+        monitors: fullscreen(monitors, &windows),
+        ledges: ledges(&windows),
+        active: active.map(|w| w.hwnd),
+        active_fullscreen,
+        strips: strips(&windows),
+        cursor: sys::cursor(),
+    }
 }
 
 /// Внутренние рамки окон для погони за мышью (см. [`shelves_of`]). Только прямоугольники
@@ -297,7 +312,7 @@ mod sys {
     };
 
     /// Классы рабочего стола и панелей задач: на них не сидят, хотя закрывать они закрывают.
-    const SHELL: [&str; 4] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
+    const SHELL: [&str; 6] = ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Start", "ImmersiveLauncher"];
 
     impl From<RECT> for Rect {
         fn from(r: RECT) -> Self {
@@ -477,7 +492,19 @@ mod sys {
         let mut buf = [0u16; 64];
         let n = GetClassNameW(h, buf.as_mut_ptr(), buf.len() as i32);
         let name = &buf[..n.max(0) as usize];
-        SHELL.iter().any(|s| s.encode_utf16().eq(name.iter().copied()))
+        if SHELL.iter().any(|s| s.encode_utf16().eq(name.iter().copied())) {
+            return true;
+        }
+        // «Пуск» и поиск используют тот же CoreWindow, что и обычные UWP-приложения.
+        if !["Windows.UI.Core.CoreWindow", "ApplicationFrameWindow"]
+            .iter()
+            .any(|s| s.encode_utf16().eq(name.iter().copied()))
+        {
+            return false;
+        }
+        crate::win::window_path(h as isize as i64)
+            .and_then(|path| path.rsplit(['\\', '/']).next().map(str::to_ascii_lowercase))
+            .is_some_and(|exe| matches!(exe.as_str(), "startmenuexperiencehost.exe" | "shellexperiencehost.exe" | "searchhost.exe" | "searchapp.exe" | "searchui.exe"))
     }
 }
 
@@ -719,17 +746,18 @@ mod tests {
             monitors: vec![Monitor { rect: rect(0, 0, 1920, 1080), work: rect(0, 0, 1920, 1040), scale: 1.25, primary: true }],
             ledges: vec![Ledge { hwnd: 42, y: 200, left: 100, right: 300, frame: rect(100, 200, 500, 600) }],
             active: Some(7),
+            active_fullscreen: false,
             strips: vec![Ledge { hwnd: 7, y: 0, left: 0, right: 1782, frame: MAX }],
             cursor: Some(Point { x: 960, y: 540 }),
         };
         let json = serde_json::to_string(&w).unwrap();
         assert_eq!(
             json,
-            r#"{"monitors":[{"rect":{"left":0,"top":0,"right":1920,"bottom":1080},"work":{"left":0,"top":0,"right":1920,"bottom":1040},"scale":1.25,"primary":true}],"ledges":[{"hwnd":42,"y":200,"left":100,"right":300,"frame":{"left":100,"top":200,"right":500,"bottom":600}}],"active":7,"strips":[{"hwnd":7,"y":0,"left":0,"right":1782,"frame":{"left":0,"top":0,"right":1920,"bottom":1040}}],"cursor":{"x":960,"y":540}}"#
+            r#"{"monitors":[{"rect":{"left":0,"top":0,"right":1920,"bottom":1080},"work":{"left":0,"top":0,"right":1920,"bottom":1040},"scale":1.25,"primary":true}],"ledges":[{"hwnd":42,"y":200,"left":100,"right":300,"frame":{"left":100,"top":200,"right":500,"bottom":600}}],"active":7,"activeFullscreen":false,"strips":[{"hwnd":7,"y":0,"left":0,"right":1782,"frame":{"left":0,"top":0,"right":1920,"bottom":1040}}],"cursor":{"x":960,"y":540}}"#
         );
         // без активного окна — null, а не пропуск ключа
         let json = serde_json::to_string(&World::default()).unwrap();
-        assert_eq!(json, r#"{"monitors":[],"ledges":[],"active":null,"strips":[],"cursor":null}"#);
+        assert_eq!(json, r#"{"monitors":[],"ledges":[],"active":null,"activeFullscreen":false,"strips":[],"cursor":null}"#);
     }
 
     fn screen(rect: Rect, work: Rect) -> Monitor {
@@ -758,10 +786,10 @@ mod tests {
     fn fullscreen_window_above_taskbar_takes_whole_monitor() {
         let m = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1040));
         let bar = cover(1, rect(0, 1040, 1920, 1080));
-        let video = cover(2, rect(0, 0, 1920, 1080));
+        let video = perch(2, rect(0, 0, 1920, 1080));
         assert_eq!(works(std::slice::from_ref(&m), &[video, bar]), vec![rect(0, 0, 1920, 1080)]);
         // окно с полями больше монитора — тоже на весь экран
-        assert_eq!(works(&[m], &[cover(3, rect(-8, -8, 1928, 1088)), bar]), vec![rect(0, 0, 1920, 1080)]);
+        assert_eq!(works(&[m], &[perch(3, rect(-8, -8, 1928, 1088)), bar]), vec![rect(0, 0, 1920, 1080)]);
     }
 
     #[test]
@@ -769,22 +797,30 @@ mod tests {
         let m = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1040));
         let bar = cover(1, rect(0, 1040, 1920, 1080));
         // видео ушло из фокуса — панель снова над ним
-        assert_eq!(works(std::slice::from_ref(&m), &[bar, cover(2, rect(0, 0, 1920, 1080))]), vec![m.work]);
+        assert_eq!(works(std::slice::from_ref(&m), &[bar, perch(2, rect(0, 0, 1920, 1080))]), vec![m.work]);
         // развёрнутое окно до панели не достаёт, решает сама панель
         assert_eq!(works(std::slice::from_ref(&m), &[maxed(2, rect(0, 0, 1920, 1040), 1800), bar]), vec![m.work]);
         // окошко поверх панели — не весь экран
-        assert_eq!(works(std::slice::from_ref(&m), &[cover(3, rect(900, 1000, 1100, 1060)), cover(2, rect(0, 0, 1920, 1080)), bar]), vec![m.work]);
+        assert_eq!(works(std::slice::from_ref(&m), &[cover(3, rect(900, 1000, 1100, 1060)), perch(2, rect(0, 0, 1920, 1080)), bar]), vec![m.work]);
     }
 
     #[test]
     fn fullscreen_lowers_only_its_monitor() {
         let a = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1040));
         let b = Monitor { primary: false, ..screen(rect(1920, 0, 3840, 1080), rect(1920, 0, 3840, 1040)) };
-        let ws = [cover(2, rect(0, 0, 1920, 1080)), cover(1, rect(0, 1040, 1920, 1080)), cover(4, rect(1920, 1040, 3840, 1080))];
+        let ws = [perch(2, rect(0, 0, 1920, 1080)), cover(1, rect(0, 1040, 1920, 1080)), cover(4, rect(1920, 1040, 3840, 1080))];
         assert_eq!(works(&[a, b.clone()], &ws), vec![rect(0, 0, 1920, 1080), b.work]);
         // панели нет (автоскрытие) — менять нечего
         let c = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1080));
-        assert_eq!(works(std::slice::from_ref(&c), &[cover(2, rect(0, 0, 1920, 1080))]), vec![c.work]);
+        assert_eq!(works(std::slice::from_ref(&c), &[perch(2, rect(0, 0, 1920, 1080))]), vec![c.work]);
+    }
+
+    #[test]
+    fn shell_surface_does_not_lower_the_floor_behind_the_taskbar() {
+        let m = screen(rect(0, 0, 1920, 1080), rect(0, 0, 1920, 1040));
+        let start = cover(1, m.rect);
+        let taskbar = cover(2, rect(0, 1040, 1920, 1080));
+        assert_eq!(works(std::slice::from_ref(&m), &[start, taskbar]), vec![m.work]);
     }
 
     /// Карта этой машины: `cargo test -- --ignored --nocapture`. Без заголовков — только геометрия.

@@ -610,7 +610,7 @@ mod sys {
             if slow_tick {
                 slow = at;
                 quiet = win::quiet();
-                bossed = win::bossed();
+                bossed = win::bossed() || crate::game_hidden();
             }
 
             let ctrl = down(VK_CONTROL);
@@ -635,7 +635,7 @@ mod sys {
             // зажечься можно и между медленными тиками — тогда «не мешать» спросим прямо сейчас
             if want && !on && !slow_tick {
                 quiet = win::quiet();
-                bossed = win::bossed();
+                bossed = win::bossed() || crate::game_hidden();
             }
             let sticky = STICKY.load(Ordering::Relaxed);
             if blocked(quiet, bossed, sticky) {

@@ -12,7 +12,7 @@
   import FormSlider from './FormSlider.svelte';
   import NewsFeeds from './NewsFeeds.svelte';
   import SettingsFields from './SettingsFields.svelte';
-  import { Button, Dialog, Group, Hint, Radio, Section, TextInput } from './ui';
+  import { Button, Check, Dialog, Group, Hint, Radio, Section, Slider, TextInput } from './ui';
 
   /** Сколько ждать, пока питомец допишет файлы перед переносом. Не ответил — переносим всё равно. */
   const FREEZE_WAIT_MS = 3000;
@@ -49,6 +49,22 @@
   /** Язык, с которым программа запущена: выбрали другой — после сохранения перезапуск. */
   let startLang: LangPref | null = null;
   let relaunching = $state(false);
+  let autostart = $state(false);
+  let autostartReady = $state(false);
+  let startupError = $state('');
+
+  async function changeAutostart(on: boolean) {
+    autostartReady = false;
+    startupError = '';
+    try {
+      await invoke('set_autostart', { on });
+      autostart = on;
+    } catch (e) {
+      startupError = errorText(e);
+    } finally {
+      autostartReady = true;
+    }
+  }
 
   /** Названия языков — каждый на себе: заблудившийся в чужом языке найдёт свой. */
   const LANG_NAMES: Record<LangPref, string> = { auto: '', ru: 'Русский', en: 'English' };
@@ -77,6 +93,10 @@
   });
 
   async function load() {
+    invoke<boolean>('is_autostart').then((on) => {
+      autostart = on;
+      autostartReady = true;
+    }).catch((e) => (startupError = errorText(e)));
     try {
       const [raw, dataDir] = await Promise.all([
         invoke<string | null>('load_state', { key: 'settings' }),
@@ -240,12 +260,24 @@
     <Section title={t('Питомец и темы', 'Pet and topics')} rule>
       <SettingsFields bind:settings part="pet" disabled={!loaded || moving} />
       <FormSlider bind:form={settings.form} disabled={!loaded || moving} />
+      <Group legend={t(`Масштаб питомца и предметов · ${settings.spriteScale}%`, `Pet and item size · ${settings.spriteScale}%`)}>
+        <Slider bind:value={settings.spriteScale} min={50} max={150} step={25} disabled={!loaded || moving}
+          aria-label={t('Масштаб питомца и предметов', 'Pet and item size')} />
+      </Group>
     </Section>
 
     <Section title={t('Главные галочки', 'Main switches')} rule>
       <SettingsFields bind:settings part="toggles" disabled={!loaded || moving} />
     </Section>
   </div>
+
+  <Section title={t('Запуск и помощь', 'Startup and help')} rule>
+    <Check bind:checked={() => autostart, changeAutostart} disabled={!autostartReady}>
+      {t('Запускать при входе в Windows', 'Start when I sign in to Windows')}
+    </Check>
+    {#if startupError}<Hint tone="error">{startupError}</Hint>{/if}
+    <Button onclick={() => invoke('open_guide').catch(console.error)}>{t('Открыть гайд', 'Open quick guide')}</Button>
+  </Section>
 
   {#if saveError}
     <Hint tone="error">{saveError}</Hint>

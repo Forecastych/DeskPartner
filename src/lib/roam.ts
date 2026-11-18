@@ -17,6 +17,7 @@ export interface Monitor {
   rect: Rect;
   work: Rect;
   scale: number;
+  spriteScale?: number;
   primary: boolean;
 }
 /** Открытый (не закрытый окнами выше) кусок верхней кромки окна; у окна может быть несколько кусков. */
@@ -33,6 +34,7 @@ export interface World {
   ledges: Ledge[];
   /** Окно, в котором работает человек; null — рабочий стол, панель задач или ничего. */
   active?: number | null;
+  activeFullscreen?: boolean;
   /** Полосы заголовков развёрнутых окон левее кнопок «свернуть/закрыть»: только поспать. */
   strips?: Ledge[];
   /** Курсор, физ. px: по нему видно, на какие мониторы человек смотрит. */
@@ -123,7 +125,7 @@ export interface Pet {
 export type RoamEvent = 'arrived' | 'landed' | 'fell' | 'gone' | 'back';
 
 /** Сторона спрайта на мониторе, физ. px. */
-export const side = (m: Monitor): number => SIDE * m.scale;
+export const side = (m: Monitor): number => SIDE * m.scale * (m.spriteScale ?? 1);
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(Math.max(v, lo), hi);
 /** Разница времени кадра в [0, MAX_DT_MS]; NaN — ноль. */

@@ -5,6 +5,7 @@ import './app.css';
 import App from './App.svelte';
 import Bowl from './Bowl.svelte';
 import Bubble from './Bubble.svelte';
+import Guide from './Guide.svelte';
 import Laser from './Laser.svelte';
 import Mouse from './Mouse.svelte';
 import PetMenu from './PetMenu.svelte';
@@ -25,6 +26,8 @@ const views: Record<string, Component> = {
   gift: Thing,
   setup: Setup,
   settings: Settings,
+  guide: Guide,
+  'whats-new': Guide,
   stats: Stats,
   menu: PetMenu,
   bubble: Bubble,

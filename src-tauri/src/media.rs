@@ -147,6 +147,8 @@ impl Loudness {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Media {
     pub watching: bool,
+    /// Активное окно относится к браузеру или плееру. Видео в фоне может идти отдельно от игры.
+    pub foreground_media: bool,
     /// Название из плитки; пусто — плеер его не передаёт.
     pub title: String,
     pub loud: bool,
@@ -234,6 +236,8 @@ mod sys {
 
                     let now = Media {
                         watching: watching(session.as_ref(), &fg, loud.level(), full),
+                        foreground_media: listed(BROWSERS, &fg) || listed(PLAYERS, &fg)
+                            || session.as_ref().is_some_and(|s| s.video && s.playing && s.source == fg),
                         title: session.as_ref().map(|s| s.title.clone()).unwrap_or_default(),
                         loud: loud.loud(at),
                     };

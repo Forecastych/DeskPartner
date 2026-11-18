@@ -112,12 +112,12 @@
     <Check
       bind:checked={settings.gameWindow}
       hint={t(
-        'Играешь в Hearthstone или другие неспешные игры? Включи — питомец посидит с тобой.',
-        'Playing Hearthstone or another slow-paced game? Turn this on and your pet keeps you company.',
+        'По умолчанию питомец и предметы прячутся. В эксклюзивном полноэкранном режиме питомец всегда скрыт.',
+        'The pet and items hide by default. The pet always hides in exclusive fullscreen.',
       )}
       {disabled}
     >
-      {t('Заходить в окно игры', 'Visit game windows')}
+      {t('Показывать питомца в полноэкранных играх без рамки', 'Show the pet in borderless fullscreen games')}
     </Check>
 
     <Check

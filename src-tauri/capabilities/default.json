@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Окна питомца, миски, лежака, лотка, подарка, мыши, лужи, первого запуска, настроек, статистики, меню и лазера",
-  "windows": ["pet", "bowl", "bed", "litter", "gift", "mouse", "setup", "settings", "menu", "bubble", "laser", "push", "puddle", "stats"],
+  "windows": ["pet", "bowl", "bed", "litter", "gift", "mouse", "setup", "settings", "menu", "bubble", "laser", "push", "puddle", "stats", "guide", "whats-new"],
   "permissions": ["core:default"]
 }
