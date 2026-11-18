@@ -12,7 +12,10 @@ const INSTALLER_INVITE: &str = "iris-gift-invite";
 const PORTRAIT_FILE: &str = "iris-portrait.jpg";
 const HIDDEN_FILE: &str = "iris-frame-hidden";
 const PORTRAIT: &str = "iris-portrait";
-const STUDIO: &str = "https://irismacrostudio.ru/samara";
+const STUDIO: &str = concat!(
+    "https://irismacrostudio.ru/samara",
+    "?utm_source=deskpartner&utm_medium=referral&utm_campaign=iris_samara&utm_content=portrait",
+);
 pub const FRAME: &str = "iris-frame";
 const FRAME_SIZE: f64 = 120.0;
 const MAX_PHOTO: u64 = 8 * 1024 * 1024;
